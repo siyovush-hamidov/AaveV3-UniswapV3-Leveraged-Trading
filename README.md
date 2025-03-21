@@ -1,66 +1,38 @@
-## Foundry
+# AAVE Leverage Strategy
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+This project demonstrates how to create leveraged positions using AAVE lending protocol through both manual iteration and flash loans.
 
-Foundry consists of:
+## Key Components
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+1. **AaveLeverage.sol**: Main contract implementing leveraged position strategies
+2. **Tests**: Demonstration of the leverage mechanisms in action
 
-## Documentation
+## Setup Instructions
 
-https://book.getfoundry.sh/
+1. Clone the repository
+2. Install Foundry if you haven't already: [https://book.getfoundry.sh/getting-started/installation](https://book.getfoundry.sh/getting-started/installation)
+3. Install dependencies:
+`forge install`
+## Running Tests
 
-## Usage
+To run the tests on a local fork of mainnet:
+`forge test -vv`
+Use `-vvv` for more verbose output.
 
-### Build
+## Leverage Concepts
 
-```shell
-$ forge build
-```
+The code demonstrates two methods for creating leveraged positions:
 
-### Test
+1. **Manual Iterative Leverage**: Deposit collateral, borrow, swap, deposit again, repeat.
+2. **Flash Loan Leverage**: Use a flash loan to create leverage in a single transaction.
 
-```shell
-$ forge test
-```
+## Maximum Leverage Calculation
 
-### Format
+For an asset with LTV (Loan-to-Value) ratio of L (expressed as a decimal):
 
-```shell
-$ forge fmt
-```
+Maximum theoretical leverage = 1/(1-L)
 
-### Gas Snapshots
+For example, with LTV of 0.7 (70%):
+Maximum leverage = 1/(1-0.7) = 3.33x
 
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+In practice, a safety margin should be applied to avoid liquidation.
