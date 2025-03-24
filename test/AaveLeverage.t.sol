@@ -32,10 +32,17 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    function testManualLeverage() public {
+    function testManualLeverageLong() public {
         // Действуем от имени кита
         vm.startPrank(WHALE);
+        // Исходные балансы
+        uint256 initialWethBalance = IERC20(WETH).balanceOf(WHALE);
+        // Шаг 1: Поставляем WETH в качестве обеспечения
+        leverage.supplyCollateral(WETH, initialWethDeposit);
+        // Шаг 2: Создаем левереджированную позицию
+        leverage.openLeveragedPosition(true);
 
+        // Получаем данные о счете
         (
             uint256 totalCollateralBase,
             uint256 totalDebtBase,
@@ -45,35 +52,16 @@ contract AaveLeverageTest is Test {
             uint256 healthFactor
         ) = leverage.getAccountData();
 
-        console.log("Before manual leverage: ");
+        console.log("\nAfter manual leverage: ");
         console.log("Total collateral (USD):", totalCollateralBase / 1e8);
         console.log("Total debt (USD):", totalDebtBase / 1e8);
         console.log("Available to borrow (USD):", availableBorrowsBase / 1e8);
-        console.log("LTV ratio (%):", ltv / 100);
-        console.log("Health factor:", healthFactor / 1e18, "\n");
-
-        // Исходные балансы
-        uint256 initialWethBalance = IERC20(WETH).balanceOf(WHALE);
-
-        // Шаг 1: Поставляем WETH в качестве обеспечения
-        leverage.supplyCollateral(WETH, initialWethDeposit);
-
-        // Шаг 2: Создаем левереджированную позицию
-        leverage.createLeveragedLongPosition(3); // 3 итерации
-
-        // Получаем данные о счете
-        (totalCollateralBase, totalDebtBase, availableBorrowsBase,, ltv, healthFactor) = leverage.getAccountData();
-
-        console.log("After manual leverage: ");
-        console.log("Total collateral (USD):", totalCollateralBase / 1e8);
-        console.log("Total debt (USD):", totalDebtBase / 1e8);
-        console.log("Available to borrow (USD):", availableBorrowsBase / 1e8);
-        console.log("LTV ratio (%):", ltv / 100);
-        console.log("Health factor:", healthFactor / 1e18);
+        console.log("LTV ratio (%):", ltv);
+        console.log("Health factor:", healthFactor);
 
         // Рассчитываем общий левередж
         uint256 leverageRatio = (totalCollateralBase * 1e18) / (totalCollateralBase - totalDebtBase);
-        console.log("Leverage ratio: x", leverageRatio / 1e18);
+        console.log("Leverage ratio: x", leverageRatio);
 
         vm.stopPrank();
     }
