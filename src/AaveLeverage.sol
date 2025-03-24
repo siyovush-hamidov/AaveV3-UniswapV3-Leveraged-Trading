@@ -33,6 +33,7 @@ interface IPool {
             uint256 ltv,
             uint256 healthFactor
         );
+    function getAddressesProvider() external view returns (ILendingPoolAddressesProvider);
 }
 
 interface IAaveProtocolDataProvider {
@@ -46,6 +47,15 @@ interface IAaveProtocolDataProvider {
             uint256 reserveDecimals,
             uint256 reserveFactor
         );
+}
+
+interface IPriceOracle {
+    function getAssetPrice(address asset) external view returns (uint256);
+}
+
+interface ILendingPoolAddressesProvider {
+    // function getAddressesProvider() external view returns (address);
+    function getPriceOracle() external view returns (address);
 }
 
 interface IUniswapV3Router {
@@ -80,18 +90,29 @@ contract AaveLeverage is IFlashLoanReceiver {
     IPool public lendingPool;
     IAaveProtocolDataProvider public dataProvider;
     IUniswapV3Router public swapRouter;
+    ILendingPoolAddressesProvider public addressProvider;
+    IPriceOracle public priceOracle;
 
     address public wethAddress;
     address public usdcAddress;
     uint24 public constant UNISWAP_POOL_FEE = 3000;
 
-    constructor(address _lendingPool, address _dataProvider, address _swapRouter, address _weth, address _usdc) {
+    constructor(
+        address _lendingPool,
+        address _dataProvider,
+        address _addressProvider,
+        address _swapRouter,
+        address _weth,
+        address _usdc
+    ) {
         owner = msg.sender;
         lendingPool = IPool(_lendingPool);
         dataProvider = IAaveProtocolDataProvider(_dataProvider);
+        addressProvider = ILendingPoolAddressesProvider(_addressProvider);
         swapRouter = IUniswapV3Router(_swapRouter);
         wethAddress = _weth;
         usdcAddress = _usdc;
+        priceOracle = IPriceOracle(addressProvider.getPriceOracle());
     }
 
     modifier onlyOwner() {
@@ -106,30 +127,25 @@ contract AaveLeverage is IFlashLoanReceiver {
     }
 
     function getMaxBorrowAmount(address borrowAsset) public view returns (uint256) {
-        // Get available borrow base amount (in USD)
         (,, uint256 availableBorrowsBase,,,) = lendingPool.getUserAccountData(address(this));
-        // Get reserve decimals for the asset we want to borrow
         (uint256 reserveDecimals,,,,) = dataProvider.getReserveConfigurationData(borrowAsset);
-        // Base currency (USD) uses 8 decimals in Aave V3
         uint256 baseDecimals = 8;
-
-        // Convert from base currency to token amount
-        // If base is 8 decimals and USDC is 6, we divide by 10^2
-        if (baseDecimals > reserveDecimals) {
-            return availableBorrowsBase / (10 ** (baseDecimals - reserveDecimals));
-        } else {
-            return availableBorrowsBase * (10 ** (reserveDecimals - baseDecimals));
-        }
+        uint256 assetPrice = priceOracle.getAssetPrice(borrowAsset); // Получаем цену актива в USD с 8 знаками
+        // Переводим `availableBorrowsBase` из USD в количество borrowAsset
+        uint256 borrowableAmount = (availableBorrowsBase * (10 ** reserveDecimals)) / assetPrice;
+        return borrowableAmount;
     }
 
     // Пример маршрута для создания левереджированной длинной позиции по ETH
     function openLeveragedPosition(bool isLong) external onlyOwner {
         // Однократно одобряем USDC и WETH для экономии газа
         IERC20(usdcAddress).approve(address(swapRouter), type(uint256).max);
+        IERC20(wethAddress).approve(address(swapRouter), type(uint256).max);
+        IERC20(usdcAddress).approve(address(lendingPool), type(uint256).max);
         IERC20(wethAddress).approve(address(lendingPool), type(uint256).max);
 
-        uint256 totalBorrowedUSDC = 0; // Общая сумма заемных средств в USDC
-        uint256 totalSuppliedETH = 0; // Общая сумма депонированного ETH
+        uint256 totalBorrowedAsset = 0; // Общая сумма заемных средств в USDC
+        uint256 totalSuppliedAsset = 0; // Общая сумма депонированного ETH
         uint256 totalCollateral = 0;
         uint256 totalDebt = 0;
         uint256 currentHealthFactor = 1;
@@ -140,53 +156,40 @@ contract AaveLeverage is IFlashLoanReceiver {
 
         // Запускаем цикл, пока health factor остается выше 1.0
         while (currentHealthFactor > 1.2e18) {
-            console.log("Iteration #", iteration++);
-
             // Определяем максимально возможную сумму заема в USDC
-            uint256 maxBorrowableUSDC = getMaxBorrowAmount(usdcAddress);
-            if (maxBorrowableUSDC <= 1) {
+            uint256 maxBorrowableAssetAmount =
+                (isLong ? getMaxBorrowAmount(usdcAddress) : getMaxBorrowAmount(wethAddress));
+            // uint256 maxBorrowableUSDC = getMaxBorrowAmount(usdcAddress);
+            (,, uint256 availableBorrowsBase,,,) = lendingPool.getUserAccountData(address(this));
+
+            if (maxBorrowableAssetAmount <= 1) {
                 console.log("No more borrowing capacity!");
                 break;
             }
-
-            console.log("Borrowing USDC:", maxBorrowableUSDC / 1e6);
-            lendingPool.borrow(usdcAddress, maxBorrowableUSDC, 2, 0, address(this));
-            totalBorrowedUSDC += maxBorrowableUSDC;
-            console.log("Total USDC borrowed:", totalBorrowedUSDC / 1e6);
-
+            lendingPool.borrow((isLong ? usdcAddress : wethAddress), maxBorrowableAssetAmount, 2, 0, address(this));
+            totalBorrowedAsset += maxBorrowableAssetAmount;
             // Обмениваем USDC на ETH через Uniswap
             IUniswapV3Router.ExactInputSingleParams memory swapParams = IUniswapV3Router.ExactInputSingleParams({
-                tokenIn: usdcAddress,
-                tokenOut: wethAddress,
+                tokenIn: (isLong ? usdcAddress : wethAddress),
+                tokenOut: (isLong ? wethAddress : usdcAddress),
                 fee: UNISWAP_POOL_FEE,
                 recipient: address(this),
                 deadline: block.timestamp + 15,
-                amountIn: maxBorrowableUSDC,
-                amountOutMinimum: (maxBorrowableUSDC * 990) / 1000, // Учитываем небольшой slippage
+                amountIn: maxBorrowableAssetAmount,
+                amountOutMinimum: (isLong ? (maxBorrowableAssetAmount * 990 / 1000) : 0),
                 sqrtPriceLimitX96: 0
             });
 
-            uint256 receivedETH = swapRouter.exactInputSingle(swapParams);
-            console.log("Received ETH from swap:", receivedETH / 1e18);
-            totalSuppliedETH += receivedETH;
-            console.log("Total ETH supplied as collateral:", totalSuppliedETH / 1e18);
-
+            uint256 receivedAssetFromUniswap = swapRouter.exactInputSingle(swapParams);
+            totalSuppliedAsset += receivedAssetFromUniswap;
             // Депонируем полученный ETH обратно в AAVE
-            lendingPool.supply(wethAddress, receivedETH, address(this), 0);
+            lendingPool.supply((isLong ? wethAddress : usdcAddress), receivedAssetFromUniswap, address(this), 0);
 
             // Обновляем данные аккаунта и проверяем новый health factor
             (totalCollateral, totalDebt,,,, currentHealthFactor) = lendingPool.getUserAccountData(address(this));
-
-            console.log("Updated leverage ratio: x", (totalCollateral * 1e18) / (totalCollateral - totalDebt) / 1e16);
-            console.log("Updated health factor:", currentHealthFactor / 1e16, "\n");
-
-            // Останавливаем, если health factor стал ниже 1.0 (близок к ликвидации)
-            if (currentHealthFactor < 1e18) break;
         }
-
-        console.log("Final borrowed USDC:", totalBorrowedUSDC);
-        console.log("Final supplied ETH:", totalSuppliedETH);
-
+        console.log("Final borrowed asset:", totalBorrowedAsset);
+        console.log("Final supplied asset:", totalSuppliedAsset);
         // Финальный расчет левериджа
         (uint256 finalCollateral, uint256 finalDebt,,,,) = lendingPool.getUserAccountData(address(this));
         console.log("Final leverage ratio: x", (finalCollateral * 1e18) / (finalCollateral - finalDebt));
