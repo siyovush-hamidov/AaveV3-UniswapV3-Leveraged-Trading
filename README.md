@@ -14,7 +14,7 @@ The program allows you to:
 1.  **Install Foundry:**
 
     ```bash
-    curl -L [https://foundry.paradigm.xyz](https://foundry.paradigm.xyz) | bash
+    curl -L https://foundry.paradigm.xyz | bash
     foundryup
     ```
 
@@ -23,14 +23,14 @@ The program allows you to:
 2.  **Clone the Repository:**
 
     ```bash
-    git clone [https://github.com/your-repo-link](https://www.google.com/search?q=https://github.com/your-repo-link)
-    cd aave-leverage
+    git clone https://github.com/siyovush-hamidov/AaveV3-UniswapV3-Leveraged-Trading
+    cd AaveV3-UniswapV3-Leveraged-Trading
     ```
 
-3.  **Install Dependencies:**
+3.  **Update Submodules:**
 
     ```bash
-    forge install
+    git submodule update --init --recursive
     ```
 
     It's like assembling a team of superheroes for your project!
@@ -38,7 +38,7 @@ The program allows you to:
 4.  **Run Anvil:**
 
     ```bash
-    anvil --fork-url [https://eth.llamarpc.com](https://eth.llamarpc.com)
+    anvil --fork-url https://eth.llamarpc.com
     ```
 
     This creates a local copy of the Ethereum mainnet where you can test your contract.
@@ -46,7 +46,7 @@ The program allows you to:
 5.  **Run the Deployment Script:**
 
     ```bash
-    forge script script/RunLeverage.s.sol:RunLeverageScript --rpc-url [http://127.0.0.1:8545] --broadcast -vvvv
+    forge script script/RunLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vvvv
     ```
 
     This deploys your contract to the local network.
@@ -54,7 +54,7 @@ The program allows you to:
 6.  **Run Tests:**
 
     ```bash
-    forge test -vvvv
+    forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 --via-ir -vv
     ```
 
     Make sure everything works as expected! ✅
