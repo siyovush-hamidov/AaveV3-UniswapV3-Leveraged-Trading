@@ -1,4 +1,4 @@
-# ♂️ Aave Leverage: Leverage Trading on Aave V3!
+# ♂️ Leverage Trading on Aave V3 with Uniswap V3
 
 This project demonstrates how to use Aave V3 to open leveraged positions on Uniswap V3. Imagine being able to amplify your trading power by borrowing assets directly from Aave!
 
