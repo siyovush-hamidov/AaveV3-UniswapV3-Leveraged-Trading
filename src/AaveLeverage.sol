@@ -3,16 +3,12 @@ pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "forge-std/Test.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-interface IPool {
+interface IAavePool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
-    function withdraw(address asset, uint256 amount, address to) external returns (uint256);
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)
         external;
-    function repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf)
-        external
-        returns (uint256);
     function flashLoan(
         address receiverAddress,
         address[] calldata assets,
@@ -49,13 +45,22 @@ interface IAaveProtocolDataProvider {
         );
 }
 
-interface IPriceOracle {
+interface IUniswapV3Oracle {
     function getAssetPrice(address asset) external view returns (uint256);
 }
 
 interface ILendingPoolAddressesProvider {
-    // function getAddressesProvider() external view returns (address);
     function getPriceOracle() external view returns (address);
+}
+
+interface IFlashLoanReceiver {
+    function executeOperation(
+        address[] calldata assets,
+        uint256[] calldata amounts,
+        uint256[] calldata premiums,
+        address initiator,
+        bytes calldata params
+    ) external returns (bool);
 }
 
 interface IUniswapV3Router {
@@ -73,189 +78,145 @@ interface IUniswapV3Router {
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 }
 
-interface IFlashLoanReceiver {
-    function executeOperation(
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata premiums,
-        address initiator,
-        bytes calldata params
-    ) external returns (bool);
+interface IUniswapV3Quoter {
+    function quoteExactInputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint160 sqrtPriceLimitX96
+    ) external returns (uint256 amountOut);
 }
 
-contract AaveLeverage is IFlashLoanReceiver {
+contract AaveLeverage is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    address public owner;
-    IPool public lendingPool;
-    IAaveProtocolDataProvider public dataProvider;
-    IUniswapV3Router public swapRouter;
-    ILendingPoolAddressesProvider public addressProvider;
-    IPriceOracle public priceOracle;
+    address private immutable owner;
+    IAavePool private immutable aaveLendingPool;
+    IAaveProtocolDataProvider private immutable aaveDataProvider;
+    IUniswapV3Router private immutable uniswapRouter;
+    IUniswapV3Quoter private immutable uniswapQuoter;
+    IUniswapV3Oracle private immutable uniswapOracle;
+    address private immutable wethAddress;
+    address private immutable usdcAddress;
+    uint24 private immutable UNISWAP_POOL_FEE;
 
-    address public wethAddress;
-    address public usdcAddress;
-    uint24 public constant UNISWAP_POOL_FEE = 3000;
+    event LeveragedPositionOpened(address indexed opener);
+    event LeveragedPositionOpenedWithFlashLoan(address indexed opener);
+
+    error OnlyOwner();
+    error InsufficientAllowance();
+    error InsufficientBalance();
+    error InvalidSlippage();
+    error InvalidFlashLoanCallback();
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert OnlyOwner();
+        _;
+    }
 
     constructor(
-        address _lendingPool,
-        address _dataProvider,
+        address _aaveLendingPool,
+        address _aaveDataProvider,
         address _addressProvider,
-        address _swapRouter,
+        address _uniswapRouter,
+        address _uniswapQuoter,
+        uint24 _UNISWAP_POOL_FEE,
         address _weth,
         address _usdc
     ) {
         owner = msg.sender;
-        lendingPool = IPool(_lendingPool);
-        dataProvider = IAaveProtocolDataProvider(_dataProvider);
-        addressProvider = ILendingPoolAddressesProvider(_addressProvider);
-        swapRouter = IUniswapV3Router(_swapRouter);
+        aaveLendingPool = IAavePool(_aaveLendingPool);
+        aaveDataProvider = IAaveProtocolDataProvider(_aaveDataProvider);
+        uniswapRouter = IUniswapV3Router(_uniswapRouter);
+        uniswapQuoter = IUniswapV3Quoter(_uniswapQuoter);
+        uniswapOracle = IUniswapV3Oracle(ILendingPoolAddressesProvider(_addressProvider).getPriceOracle());
         wethAddress = _weth;
         usdcAddress = _usdc;
-        priceOracle = IPriceOracle(addressProvider.getPriceOracle());
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
+        UNISWAP_POOL_FEE = _UNISWAP_POOL_FEE;
     }
 
     function supplyCollateral(address asset, uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount provided must be greater than 0!");
+        require(asset == wethAddress || asset == usdcAddress, "Unsupported asset!");
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        IERC20(asset).approve(address(lendingPool), amount);
-        lendingPool.supply(asset, amount, address(this), 0);
+        _approveIfNeeded(asset, address(aaveLendingPool));
+        aaveLendingPool.supply(asset, amount, address(this), 0);
     }
 
-    function getMaxBorrowAmount(address borrowAsset) public view returns (uint256) {
-        (,, uint256 availableBorrowsBase,,,) = lendingPool.getUserAccountData(address(this));
-        (uint256 reserveDecimals,,,,) = dataProvider.getReserveConfigurationData(borrowAsset);
-        uint256 baseDecimals = 8;
-        uint256 assetPrice = priceOracle.getAssetPrice(borrowAsset); // Получаем цену актива в USD с 8 знаками
-        // Переводим `availableBorrowsBase` из USD в количество borrowAsset
-        uint256 borrowableAmount = (availableBorrowsBase * (10 ** reserveDecimals)) / assetPrice;
-        return borrowableAmount;
-    }
-
-    // Пример маршрута для создания левереджированной длинной позиции по ETH
     function openLeveragedPosition(bool isLong) external onlyOwner {
-        // Однократно одобряем USDC и WETH для экономии газа
-        IERC20(usdcAddress).approve(address(swapRouter), type(uint256).max);
-        IERC20(wethAddress).approve(address(swapRouter), type(uint256).max);
-        IERC20(usdcAddress).approve(address(lendingPool), type(uint256).max);
-        IERC20(wethAddress).approve(address(lendingPool), type(uint256).max);
-
-        uint256 totalBorrowedAsset = 0; // Общая сумма заемных средств в USDC
-        uint256 totalSuppliedAsset = 0; // Общая сумма депонированного ETH
-        uint256 totalCollateral = 0;
-        uint256 totalDebt = 0;
-        uint256 currentHealthFactor = 1;
-        uint256 iteration = 1;
-
-        // Получаем начальный health factor
-        (,,,,, currentHealthFactor) = lendingPool.getUserAccountData(address(this));
-
-        // Запускаем цикл, пока health factor остается выше 1.0
-        while (currentHealthFactor > 1.2e18) {
-            // Определяем максимально возможную сумму заема в USDC
-            uint256 maxBorrowableAssetAmount =
-                (isLong ? getMaxBorrowAmount(usdcAddress) : getMaxBorrowAmount(wethAddress));
-            // uint256 maxBorrowableUSDC = getMaxBorrowAmount(usdcAddress);
-            (,, uint256 availableBorrowsBase,,,) = lendingPool.getUserAccountData(address(this));
-
-            if (maxBorrowableAssetAmount <= 1) {
-                console.log("No more borrowing capacity!");
-                break;
-            }
-            lendingPool.borrow((isLong ? usdcAddress : wethAddress), maxBorrowableAssetAmount, 2, 0, address(this));
-            totalBorrowedAsset += maxBorrowableAssetAmount;
-            // Обмениваем USDC на ETH через Uniswap
-            IUniswapV3Router.ExactInputSingleParams memory swapParams = IUniswapV3Router.ExactInputSingleParams({
-                tokenIn: (isLong ? usdcAddress : wethAddress),
-                tokenOut: (isLong ? wethAddress : usdcAddress),
-                fee: UNISWAP_POOL_FEE,
-                recipient: address(this),
-                deadline: block.timestamp + 15,
-                amountIn: maxBorrowableAssetAmount,
-                amountOutMinimum: (isLong ? (maxBorrowableAssetAmount * 990 / 1000) : 0),
-                sqrtPriceLimitX96: 0
-            });
-
-            uint256 receivedAssetFromUniswap = swapRouter.exactInputSingle(swapParams);
-            totalSuppliedAsset += receivedAssetFromUniswap;
-            // Депонируем полученный ETH обратно в AAVE
-            lendingPool.supply((isLong ? wethAddress : usdcAddress), receivedAssetFromUniswap, address(this), 0);
-
-            // Обновляем данные аккаунта и проверяем новый health factor
-            (totalCollateral, totalDebt,,,, currentHealthFactor) = lendingPool.getUserAccountData(address(this));
+        address borrowAsset = isLong ? usdcAddress : wethAddress;
+        address supplyAsset = isLong ? wethAddress : usdcAddress;
+        _approveIfNeeded(borrowAsset, address(uniswapRouter));
+        _approveIfNeeded(supplyAsset, address(aaveLendingPool));
+        uint256 maxBorrowable;
+        while (
+            (maxBorrowable = _getMaxBorrowAmount(borrowAsset))
+                > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
+        ) {
+            aaveLendingPool.borrow(borrowAsset, maxBorrowable, 2, 0, address(this));
+            uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, maxBorrowable);
+            aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
         }
-        console.log("Final borrowed asset:", totalBorrowedAsset);
-        console.log("Final supplied asset:", totalSuppliedAsset);
-        // Финальный расчет левериджа
-        (uint256 finalCollateral, uint256 finalDebt,,,,) = lendingPool.getUserAccountData(address(this));
-        console.log("Final leverage ratio: x", (finalCollateral * 1e18) / (finalCollateral - finalDebt));
+        emit LeveragedPositionOpened(msg.sender);
     }
 
-    // Функция для создания левереджированной позиции с использованием флеш-кредита
-    function createLeveragedPositionWithFlashLoan(uint256 flashLoanAmount) external onlyOwner {
+    function openLeveragedPositionFlashLoan(uint256 flashLoanAmount, bool isLong) external onlyOwner {
+        require(flashLoanAmount > 0, "Flash loan amount must be greater than 0!");
+
         address[] memory assets = new address[](1);
-        assets[0] = usdcAddress;
+        assets[0] = isLong ? usdcAddress : wethAddress;
 
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = flashLoanAmount;
 
         uint256[] memory modes = new uint256[](1);
-        modes[0] = 0; // 0 = отсутствие долга, 1 = стабильная ставка, 2 = переменная ставка
+        modes[0] = 0;
 
-        lendingPool.flashLoan(address(this), assets, amounts, modes, address(this), abi.encode(flashLoanAmount), 0);
+        aaveLendingPool.flashLoan(
+            address(this), assets, amounts, modes, address(this), abi.encode(flashLoanAmount, isLong), 0
+        );
+        emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
-    // Эта функция вызывается протоколом AAVE после получения флеш-кредита
     function executeOperation(
         address[] calldata assets,
         uint256[] calldata amounts,
         uint256[] calldata premiums,
         address,
-        bytes calldata
-    ) external override returns (bool) {
-        require(msg.sender == address(lendingPool), "Callback only from lending pool");
+        bytes calldata paramsData
+    ) external nonReentrant returns (bool) {
+        if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
 
-        uint256 borrowAmount = amounts[0];
+        (uint256 borrowAmount, bool isLong) = abi.decode(paramsData, (uint256, bool));
+        require(borrowAmount > 0, "Borrow amount must be greater than 0!");
+        require(premiums[0] >= 0, "Premium must be non-negative!");
         uint256 fee = premiums[0];
         uint256 totalToRepay = borrowAmount + fee;
 
-        // Обмениваем USDC на ETH
-        IERC20(assets[0]).approve(address(swapRouter), borrowAmount);
+        _approveIfNeeded(assets[0], address(uniswapRouter));
+        uint256 receivedAssetFromUniswap = _swapTokens(assets[0], isLong ? wethAddress : usdcAddress, borrowAmount);
+        require(receivedAssetFromUniswap > 0, "Swap failed!");
 
-        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
-            tokenIn: assets[0],
-            tokenOut: wethAddress,
-            fee: UNISWAP_POOL_FEE,
-            recipient: address(this),
-            deadline: block.timestamp + 15,
-            amountIn: borrowAmount,
-            amountOutMinimum: 0, // В реальном сценарии вы должны установить минимальное значение
-            sqrtPriceLimitX96: 0
-        });
+        aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, address(this), 0);
 
-        uint256 ethReceived = swapRouter.exactInputSingle(params);
+        _approveIfNeeded(isLong ? wethAddress : usdcAddress, address(aaveLendingPool));
+        uint256 newBorrowAmount = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress);
+        aaveLendingPool.borrow(assets[0], newBorrowAmount, 2, 0, address(this));
 
-        // Поставляем ETH в качестве обеспечения
-        IERC20(wethAddress).approve(address(lendingPool), ethReceived);
-        lendingPool.supply(wethAddress, ethReceived, address(this), 0);
-
-        // Берем максимально возможный заем
-        (,, uint256 availableBorrowsBase,,,) = lendingPool.getUserAccountData(address(this));
-        uint256 newBorrowAmount = (availableBorrowsBase * 70) / 100; // 70% от доступного
-
-        lendingPool.borrow(assets[0], newBorrowAmount, 2, 0, address(this));
-
-        // Убедимся, что у нас достаточно для погашения флеш-кредита
-        require(IERC20(assets[0]).balanceOf(address(this)) >= totalToRepay, "Not enough to repay flash loan");
-
-        // Одобряем возврат флеш-кредита
-        IERC20(assets[0]).approve(address(lendingPool), totalToRepay);
+        if (IERC20(assets[0]).balanceOf(address(this)) < totalToRepay) revert InsufficientBalance();
+        _approveIfNeeded(assets[0], address(aaveLendingPool));
 
         return true;
+    }
+
+    function _getMaxBorrowAmount(address borrowAsset) private view returns (uint256) {
+        (,, uint256 availableBorrowsBase,,,) = aaveLendingPool.getUserAccountData(address(this));
+        (uint256 reserveDecimals,,,,) = aaveDataProvider.getReserveConfigurationData(borrowAsset);
+        uint256 assetPrice = uniswapOracle.getAssetPrice(borrowAsset);
+        require(assetPrice > 0, "Asset price is zero! Zero division will occur!");
+        uint256 maxBorrow = availableBorrowsBase * (10 ** reserveDecimals) / assetPrice;
+        return maxBorrow;
     }
 
     function getAccountData()
@@ -270,21 +231,41 @@ contract AaveLeverage is IFlashLoanReceiver {
             uint256 healthFactor
         )
     {
-        return lendingPool.getUserAccountData(address(this));
+        return aaveLendingPool.getUserAccountData(address(this));
     }
 
-    function withdraw(address asset, uint256 amount) external onlyOwner {
-        lendingPool.withdraw(asset, amount, owner);
+    function _approveIfNeeded(address token, address spender) private {
+        if (IERC20(token).allowance(address(this), spender) == 0) {
+            bool success = IERC20(token).approve(spender, type(uint256).max);
+            require(success, "Failed to approve!");
+        }
     }
 
-    function repay(address asset, uint256 amount) external onlyOwner {
-        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        IERC20(asset).approve(address(lendingPool), amount);
-        lendingPool.repay(asset, amount, 2, address(this));
+    function _swapTokens(address tokenIn, address tokenOut, uint256 amountIn) private returns (uint256) {
+        uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
+        if (amountOutMin == 0) revert InvalidSlippage();
+        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
+            tokenIn: tokenIn,
+            tokenOut: tokenOut,
+            fee: UNISWAP_POOL_FEE,
+            recipient: address(this),
+            deadline: block.timestamp + 15,
+            amountIn: amountIn,
+            amountOutMinimum: (amountOutMin * 9900) / 10000,
+            sqrtPriceLimitX96: 0
+        });
+        uint256 amountOut = uniswapRouter.exactInputSingle(params);
+        require(amountOut > 0, "Failed to swap!");
+        return amountOut;
     }
 
-    function emergencyWithdraw(address token) external onlyOwner {
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(owner, balance);
+    function _getMinSwapAmount(address tokenIn, address tokenOut) private returns (uint256) {
+        uint256 minAmount = 2e8;
+        uint256 estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
+        while (estimatedOutput == 0) {
+            minAmount *= 2;
+            estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
+        }
+        return minAmount;
     }
 }
