@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "forge-std/Test.sol";
 
 interface IAavePool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
@@ -30,6 +31,7 @@ interface IAavePool {
             uint256 healthFactor
         );
     function getAddressesProvider() external view returns (ILendingPoolAddressesProvider);
+    function setUserEMode(uint8 categoryId) external;
 }
 
 interface IAaveProtocolDataProvider {
@@ -134,6 +136,7 @@ contract AaveLeverage is ReentrancyGuard {
         wethAddress = _weth;
         usdcAddress = _usdc;
         UNISWAP_POOL_FEE = _UNISWAP_POOL_FEE;
+        aaveLendingPool.setUserEMode(0); // имеет смысл использовать, если токены одной категории. К примеру: стейблкойны
     }
 
     function supplyCollateral(address asset, uint256 amount) external onlyOwner {
@@ -149,13 +152,13 @@ contract AaveLeverage is ReentrancyGuard {
         address supplyAsset = isLong ? wethAddress : usdcAddress;
         _approveIfNeeded(borrowAsset, address(uniswapRouter));
         _approveIfNeeded(supplyAsset, address(aaveLendingPool));
-        uint256 maxBorrowable;
+        uint256 availableBorrows;
         while (
-            (maxBorrowable = _getMaxBorrowAmount(borrowAsset))
+            (availableBorrows = _getMaxBorrowAmount(borrowAsset))
                 > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
         ) {
-            aaveLendingPool.borrow(borrowAsset, maxBorrowable, 2, 0, address(this));
-            uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, maxBorrowable);
+            aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
+            uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
         }
         emit LeveragedPositionOpened(msg.sender);
@@ -187,7 +190,6 @@ contract AaveLeverage is ReentrancyGuard {
         bytes calldata paramsData
     ) external nonReentrant returns (bool) {
         if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
-
         (uint256 borrowAmount, bool isLong) = abi.decode(paramsData, (uint256, bool));
         require(borrowAmount > 0, "Borrow amount must be greater than 0!");
         require(premiums[0] >= 0, "Premium must be non-negative!");
@@ -197,12 +199,11 @@ contract AaveLeverage is ReentrancyGuard {
         _approveIfNeeded(assets[0], address(uniswapRouter));
         uint256 receivedAssetFromUniswap = _swapTokens(assets[0], isLong ? wethAddress : usdcAddress, borrowAmount);
         require(receivedAssetFromUniswap > 0, "Swap failed!");
-
         aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, address(this), 0);
 
         _approveIfNeeded(isLong ? wethAddress : usdcAddress, address(aaveLendingPool));
-        uint256 newBorrowAmount = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress);
-        aaveLendingPool.borrow(assets[0], newBorrowAmount, 2, 0, address(this));
+        uint256 availableBorrows = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress);
+        aaveLendingPool.borrow(assets[0], availableBorrows, 2, 0, address(this));
 
         if (IERC20(assets[0]).balanceOf(address(this)) < totalToRepay) revert InsufficientBalance();
         _approveIfNeeded(assets[0], address(aaveLendingPool));
@@ -220,7 +221,7 @@ contract AaveLeverage is ReentrancyGuard {
     }
 
     function getAccountData()
-        external
+        public
         view
         returns (
             uint256 totalCollateralBase,
