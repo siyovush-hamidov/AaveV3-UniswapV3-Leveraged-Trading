@@ -147,19 +147,23 @@ contract AaveLeverage is ReentrancyGuard {
         aaveLendingPool.supply(asset, amount, address(this), 0);
     }
 
-    function openLeveragedPosition(bool isLong) external onlyOwner {
+    function openLeveragedPosition(bool isLong, uint256 minHealthFactor) external onlyOwner {
         address borrowAsset = isLong ? usdcAddress : wethAddress;
         address supplyAsset = isLong ? wethAddress : usdcAddress;
         _approveIfNeeded(borrowAsset, address(uniswapRouter));
         _approveIfNeeded(supplyAsset, address(aaveLendingPool));
         uint256 availableBorrows;
+        (,,,,, uint256 currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this));
         while (
-            (availableBorrows = _getMaxBorrowAmount(borrowAsset))
-                > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
+            (
+                (availableBorrows = _getMaxBorrowAmount(borrowAsset))
+                    > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
+            ) && currentHealthFactor > minHealthFactor
         ) {
             aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
             uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
+            (,,,,, currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
         emit LeveragedPositionOpened(msg.sender);
     }
@@ -201,7 +205,6 @@ contract AaveLeverage is ReentrancyGuard {
         require(receivedAssetFromUniswap > 0, "Swap failed!");
         aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, address(this), 0);
 
-        _approveIfNeeded(isLong ? wethAddress : usdcAddress, address(aaveLendingPool));
         uint256 availableBorrows = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress);
         aaveLendingPool.borrow(assets[0], availableBorrows, 2, 0, address(this));
 

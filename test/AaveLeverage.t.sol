@@ -21,7 +21,7 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
 
         deal(WETH, WHALE, 1 ether);
-        deal(USDC, WHALE, 1000 * 1e6);
+        deal(USDC, WHALE, 2500 * 1e6);
 
         uint24 UNISWAP_POOL_FEE = 3000;
 
@@ -46,7 +46,7 @@ contract AaveLeverageTest is Test {
 
         uint256 initialWethBalance = IERC20(WETH).balanceOf(WHALE);
         leverage.supplyCollateral(WETH, initialWethBalance);
-        leverage.openLeveragedPosition(true);
+        leverage.openLeveragedPosition(true, 1.2e18);
 
         printStats();
         vm.stopPrank();
@@ -57,15 +57,15 @@ contract AaveLeverageTest is Test {
 
         uint256 initialUsdcBalance = IERC20(USDC).balanceOf(WHALE);
         leverage.supplyCollateral(USDC, initialUsdcBalance);
-        leverage.openLeveragedPosition(false);
+        leverage.openLeveragedPosition(false, 1.2e18);
 
         printStats();
         vm.stopPrank();
     }
 
     function testFlashLoanLeverageLong() public {
-        uint256 initialWethDeposit = 1 ether;
-        uint256 usdcAmountForFlashLoan = 1000 * 1e6;
+        uint256 initialWethDeposit = 0.5 ether;
+        uint256 usdcAmountForFlashLoan = 4040 * 1e6;
 
         vm.startPrank(WHALE);
         leverage.supplyCollateral(WETH, initialWethDeposit);
