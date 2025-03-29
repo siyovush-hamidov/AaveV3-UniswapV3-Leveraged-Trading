@@ -10,12 +10,10 @@ interface IAavePool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)
         external;
-    function flashLoan(
+    function flashLoanSimple(
         address receiverAddress,
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata interestRateModes,
-        address onBehalfOf,
+        address asset,
+        uint256 amount,
         bytes calldata params,
         uint16 referralCode
     ) external;
@@ -158,58 +156,45 @@ contract AaveLeverage is ReentrancyGuard {
             (
                 (availableBorrows = _getMaxBorrowAmount(borrowAsset))
                     > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
-            ) && currentHealthFactor > minHealthFactor
+            ) // do the loop until there is enough amount of tokens for swapping
+                && currentHealthFactor > minHealthFactor // and the desired healthFactor is maintained
         ) {
             aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
             uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
-            (,,,,, currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this));
+            (,,,,, currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this)); // keeping track of healtFactor
         }
         emit LeveragedPositionOpened(msg.sender);
     }
 
     function openLeveragedPositionFlashLoan(uint256 flashLoanAmount, bool isLong) external onlyOwner {
         require(flashLoanAmount > 0, "Flash loan amount must be greater than 0!");
-
-        address[] memory assets = new address[](1);
-        assets[0] = isLong ? usdcAddress : wethAddress;
-
-        uint256[] memory amounts = new uint256[](1);
-        amounts[0] = flashLoanAmount;
-
-        uint256[] memory modes = new uint256[](1);
-        modes[0] = 0;
-
-        aaveLendingPool.flashLoan(
-            address(this), assets, amounts, modes, address(this), abi.encode(flashLoanAmount, isLong), 0
-        );
+        address asset = isLong ? usdcAddress : wethAddress;
+        aaveLendingPool.flashLoanSimple(address(this), asset, flashLoanAmount, abi.encode(flashLoanAmount, isLong), 0);
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
-    function executeOperation(
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata premiums,
-        address,
-        bytes calldata paramsData
-    ) external nonReentrant returns (bool) {
+    function executeOperation(address asset, uint256 amount, uint256 premium, address, bytes calldata paramsData)
+        external
+        nonReentrant
+        returns (bool)
+    {
         if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
         (uint256 borrowAmount, bool isLong) = abi.decode(paramsData, (uint256, bool));
         require(borrowAmount > 0, "Borrow amount must be greater than 0!");
-        require(premiums[0] >= 0, "Premium must be non-negative!");
-        uint256 fee = premiums[0];
-        uint256 totalToRepay = borrowAmount + fee;
+        require(premium >= 0, "Premium must be non-negative!");
+        uint256 totalToRepay = borrowAmount + premium; // premium is the fee for the flash loan
 
-        _approveIfNeeded(assets[0], address(uniswapRouter));
-        uint256 receivedAssetFromUniswap = _swapTokens(assets[0], isLong ? wethAddress : usdcAddress, borrowAmount);
+        _approveIfNeeded(asset, address(uniswapRouter));
+        uint256 receivedAssetFromUniswap = _swapTokens(asset, isLong ? wethAddress : usdcAddress, borrowAmount); // swaps borrowAmount of asset to opposite token
         require(receivedAssetFromUniswap > 0, "Swap failed!");
         aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, address(this), 0);
 
-        uint256 availableBorrows = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress);
-        aaveLendingPool.borrow(assets[0], availableBorrows, 2, 0, address(this));
+        uint256 availableBorrows = _getMaxBorrowAmount(isLong ? usdcAddress : wethAddress); // calculates the maximum amount that we can borrow
+        aaveLendingPool.borrow(asset, availableBorrows, 2, 0, address(this));
 
-        if (IERC20(assets[0]).balanceOf(address(this)) < totalToRepay) revert InsufficientBalance();
-        _approveIfNeeded(assets[0], address(aaveLendingPool));
+        if (IERC20(asset).balanceOf(address(this)) < totalToRepay) revert InsufficientBalance();
+        _approveIfNeeded(asset, address(aaveLendingPool)); // approving aaveLendingPool to take out our money for repayment of the flash loan
 
         return true;
     }
