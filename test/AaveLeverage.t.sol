@@ -43,7 +43,6 @@ contract AaveLeverageTest is Test {
 
     function testManualLeverageLong() public {
         vm.startPrank(WHALE);
-
         uint256 initialWethBalance = IERC20(WETH).balanceOf(WHALE);
         leverage.supplyCollateral(WETH, initialWethBalance);
         leverage.openLeveragedPosition(true, 1.2e18);
@@ -65,7 +64,7 @@ contract AaveLeverageTest is Test {
 
     function testFlashLoanLeverageLong() public {
         uint256 initialWethDeposit = 1 ether;
-        uint256 usdcAmountForFlashLoan = 6000 * 1e6;
+        uint256 usdcAmountForFlashLoan = 4 * 1450 * 1e6;
 
         vm.startPrank(WHALE);
         leverage.supplyCollateral(WETH, initialWethDeposit);
@@ -97,8 +96,8 @@ contract AaveLeverageTest is Test {
             uint256 healthFactor
         ) = leverage.getAccountData();
         console.log("Total collateral (USD * 1e8):", totalCollateralBase);
-        console.log("Total debt (USD):", totalDebtBase);
-        console.log("Available to borrow (USD):", availableBorrowsBase);
+        console.log("Total debt:", totalDebtBase);
+        console.log("Available to borrow:", availableBorrowsBase);
         console.log("LTV ratio (%):", ltv);
         console.log("Health factor:", healthFactor);
         console.log("Leverage ratio: x", totalCollateralBase * 1e18 / (totalCollateralBase - totalDebtBase));
