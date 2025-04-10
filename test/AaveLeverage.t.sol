@@ -64,7 +64,7 @@ contract AaveLeverageTest is Test {
 
     function testFlashLoanLeverageLong() public {
         uint256 initialWethDeposit = 1 ether;
-        uint256 usdcAmountForFlashLoan = 4 * 1450 * 1e6;
+        uint256 usdcAmountForFlashLoan = 4000 * 1e6;
 
         vm.startPrank(WHALE);
         leverage.supplyCollateral(WETH, initialWethDeposit);
@@ -75,8 +75,8 @@ contract AaveLeverageTest is Test {
     }
 
     function testFlashLoanLeverageShort() public {
-        uint256 initialUsdcDeposit = 1000 * 1e6;
-        uint256 wethAmountForFlashLoan = 1 ether;
+        uint256 initialUsdcDeposit = 1500 * 1e6;
+        uint256 wethAmountForFlashLoan = 2 ether;
 
         vm.startPrank(WHALE);
         leverage.supplyCollateral(USDC, initialUsdcDeposit);

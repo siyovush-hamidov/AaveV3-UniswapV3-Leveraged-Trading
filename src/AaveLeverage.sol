@@ -109,6 +109,10 @@ contract AaveLeverage is ReentrancyGuard {
     error InsufficientBalance();
     error InvalidSlippage();
     error InvalidFlashLoanCallback();
+    error InvalidFlashLoanInitiator();
+    error ZeroFlashLoanBorrowAmount();
+    error SwapFailed();
+    error HealthFactorTooLow();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert OnlyOwner();
@@ -168,32 +172,36 @@ contract AaveLeverage is ReentrancyGuard {
     }
 
     function openLeveragedPositionFlashLoan(uint256 flashLoanAmount, bool isLong) external onlyOwner {
-        require(flashLoanAmount > 0, "Flash loan amount must be greater than 0!");
+        if (flashLoanAmount == 0) revert ZeroFlashLoanBorrowAmount();
         address asset = isLong ? usdcAddress : wethAddress;
         aaveLendingPool.flashLoanSimple(address(this), asset, flashLoanAmount, abi.encode(isLong), 0);
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
-    function executeOperation(address asset, uint256 amount, uint256 premium, address, bytes calldata paramsData)
-        external
-        nonReentrant
-        returns (bool)
-    {
+    function executeOperation(
+        address asset,
+        uint256 amount,
+        uint256 premium,
+        address initiator,
+        bytes calldata paramsData
+    ) external nonReentrant returns (bool) {
         if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
+        if (initiator != address(this)) revert InvalidFlashLoanInitiator();
+        if (amount == 0) revert ZeroFlashLoanBorrowAmount();
+
         (bool isLong) = abi.decode(paramsData, (bool));
-        require(amount > 0, "Borrow amount must be greater than 0!");
-        require(premium >= 0, "Premium must be non-negative!");
         uint256 totalToRepay = amount + premium; // premium is the fee for the flash loan
 
         _approveIfNeeded(asset, address(uniswapRouter));
         uint256 receivedAssetFromUniswap = _swapTokens(asset, isLong ? wethAddress : usdcAddress, amount); // swaps borrowAmount of asset to opposite token
-        require(receivedAssetFromUniswap > 0, "Swap failed!");
-        aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, address(this), 0);
+        if (receivedAssetFromUniswap == 0) revert SwapFailed();
 
-        aaveLendingPool.borrow(asset, totalToRepay, 2, 0, address(this));
-        if (IERC20(asset).balanceOf(address(this)) < totalToRepay) revert InsufficientBalance();
+        aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, initiator, 0);
+        aaveLendingPool.borrow(asset, totalToRepay, 2, 0, initiator);
+
+        if (IERC20(asset).balanceOf(initiator) < totalToRepay) revert InsufficientBalance();
         _approveIfNeeded(asset, address(aaveLendingPool)); // approving aaveLendingPool to take out our money for repayment of the flash loan
-        
+
         return true;
     }
 
@@ -204,21 +212,6 @@ contract AaveLeverage is ReentrancyGuard {
         require(assetPrice > 0, "Asset price is zero! Zero division will occur!");
         uint256 maxBorrow = availableBorrowsBase * (10 ** reserveDecimals) / assetPrice;
         return maxBorrow;
-    }
-
-    function getAccountData()
-        public
-        view
-        returns (
-            uint256 totalCollateralBase,
-            uint256 totalDebtBase,
-            uint256 availableBorrowsBase,
-            uint256 currentLiquidationThreshold,
-            uint256 ltv,
-            uint256 healthFactor
-        )
-    {
-        return aaveLendingPool.getUserAccountData(address(this));
     }
 
     function _approveIfNeeded(address token, address spender) private {
@@ -246,6 +239,7 @@ contract AaveLeverage is ReentrancyGuard {
         return amountOut;
     }
 
+    // TODO : CHANGE TO NORMAL _getMinSwapAmount USING IUniswapV3Pool.slot0 AND sqrtPriceX96
     function _getMinSwapAmount(address tokenIn, address tokenOut) private returns (uint256) {
         uint256 minAmount = 2e8;
         uint256 estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
@@ -254,5 +248,20 @@ contract AaveLeverage is ReentrancyGuard {
             estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
         }
         return minAmount;
+    }
+
+    function getAccountData()
+        public
+        view
+        returns (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            uint256 availableBorrowsBase,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        )
+    {
+        return aaveLendingPool.getUserAccountData(address(this));
     }
 }
