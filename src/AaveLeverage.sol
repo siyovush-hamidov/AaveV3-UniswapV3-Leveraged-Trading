@@ -99,7 +99,7 @@ contract AaveLeverage is ReentrancyGuard {
     IUniswapV3Oracle private immutable uniswapOracle;
     address private immutable wethAddress;
     address private immutable usdcAddress;
-    uint24 private constant UNISWAP_POOL_FEE;
+    uint24 private immutable UNISWAP_POOL_FEE;
 
     event LeveragedPositionOpened(address indexed opener);
     event LeveragedPositionOpenedWithFlashLoan(address indexed opener);
@@ -159,14 +159,16 @@ contract AaveLeverage is ReentrancyGuard {
 
         uint256 receivedAsset;
         uint256 availableBorrows = _getMaxBorrowAmount(borrowAsset);
+        uint256 minSwapAmountUSDC = 1e6;
+        uint256 minSwapAmountWETH = 1e15;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
-        
-        while (healthFactor > minHealthFactor && availableBorrows > 0) // do the loop until the desired healthFactor is maintained {
-        {
+
+        // do the loop until the desired healthFactor is maintained and the availableBorrows has an impact
+        while (healthFactor > minHealthFactor && availableBorrows > (isLong ? minSwapAmountUSDC : minSwapAmountWETH)) {
             aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
             receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
-        
+
             availableBorrows = _getMaxBorrowAmount(borrowAsset);
             (,,,,, healthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
@@ -237,7 +239,7 @@ contract AaveLeverage is ReentrancyGuard {
                 sqrtPriceLimitX96: 0
             })
         );
-        if(amountOut != 0) SwapFailed();
+        if (amountOut == 0) revert SwapFailed();
         return amountOut;
     }
 
