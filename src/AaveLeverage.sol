@@ -99,20 +99,22 @@ contract AaveLeverage is ReentrancyGuard {
     IUniswapV3Oracle private immutable uniswapOracle;
     address private immutable wethAddress;
     address private immutable usdcAddress;
-    uint24 private immutable UNISWAP_POOL_FEE;
+    uint24 private constant UNISWAP_POOL_FEE;
 
     event LeveragedPositionOpened(address indexed opener);
     event LeveragedPositionOpenedWithFlashLoan(address indexed opener);
 
     error OnlyOwner();
-    error InsufficientAllowance();
     error InsufficientBalance();
     error InvalidSlippage();
     error InvalidFlashLoanCallback();
     error InvalidFlashLoanInitiator();
     error ZeroFlashLoanBorrowAmount();
     error SwapFailed();
-    error HealthFactorTooLow();
+    error ZeroAmountSupplyCollateral();
+    error UnsupportedAssetSupplyCollateral();
+    error ZeroAssetPrice();
+    error ApproveFailed();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert OnlyOwner();
@@ -138,12 +140,11 @@ contract AaveLeverage is ReentrancyGuard {
         wethAddress = _weth;
         usdcAddress = _usdc;
         UNISWAP_POOL_FEE = _UNISWAP_POOL_FEE;
-        aaveLendingPool.setUserEMode(0); // имеет смысл использовать, если токены одной категории. К примеру: стейблкойны
     }
 
     function supplyCollateral(address asset, uint256 amount) external onlyOwner {
-        require(amount > 0, "Amount provided must be greater than 0!");
-        require(asset == wethAddress || asset == usdcAddress, "Unsupported asset!");
+        if (amount == 0) revert ZeroAmountSupplyCollateral();
+        if (asset != wethAddress && asset != usdcAddress) revert UnsupportedAssetSupplyCollateral();
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
         _approveIfNeeded(asset, address(aaveLendingPool));
         aaveLendingPool.supply(asset, amount, address(this), 0);
@@ -152,21 +153,22 @@ contract AaveLeverage is ReentrancyGuard {
     function openLeveragedPosition(bool isLong, uint256 minHealthFactor) external onlyOwner {
         address borrowAsset = isLong ? usdcAddress : wethAddress;
         address supplyAsset = isLong ? wethAddress : usdcAddress;
+
         _approveIfNeeded(borrowAsset, address(uniswapRouter));
         _approveIfNeeded(supplyAsset, address(aaveLendingPool));
-        uint256 availableBorrows;
-        (,,,,, uint256 currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this));
-        while (
-            (
-                (availableBorrows = _getMaxBorrowAmount(borrowAsset))
-                    > (isLong ? 1 : _getMinSwapAmount(borrowAsset, supplyAsset))
-            ) // do the loop until there is enough amount of tokens for swapping
-                && currentHealthFactor > minHealthFactor // and the desired healthFactor is maintained
-        ) {
+
+        uint256 receivedAsset;
+        uint256 availableBorrows = _getMaxBorrowAmount(borrowAsset);
+        (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
+        
+        while (healthFactor > minHealthFactor && availableBorrows > 0) // do the loop until the desired healthFactor is maintained {
+        {
             aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
-            uint256 receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
+            receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
-            (,,,,, currentHealthFactor) = aaveLendingPool.getUserAccountData(address(this)); // keeping track of healtFactor
+        
+            availableBorrows = _getMaxBorrowAmount(borrowAsset);
+            (,,,,, healthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
         emit LeveragedPositionOpened(msg.sender);
     }
@@ -209,45 +211,34 @@ contract AaveLeverage is ReentrancyGuard {
         (,, uint256 availableBorrowsBase,,,) = aaveLendingPool.getUserAccountData(address(this));
         (uint256 reserveDecimals,,,,) = aaveDataProvider.getReserveConfigurationData(borrowAsset);
         uint256 assetPrice = uniswapOracle.getAssetPrice(borrowAsset);
-        require(assetPrice > 0, "Asset price is zero! Zero division will occur!");
+        if (assetPrice == 0) revert ZeroAssetPrice();
         uint256 maxBorrow = availableBorrowsBase * (10 ** reserveDecimals) / assetPrice;
         return maxBorrow;
     }
 
     function _approveIfNeeded(address token, address spender) private {
         if (IERC20(token).allowance(address(this), spender) == 0) {
-            bool success = IERC20(token).approve(spender, type(uint256).max);
-            require(success, "Failed to approve!");
+            if (!IERC20(token).approve(spender, type(uint256).max)) revert ApproveFailed();
         }
     }
 
     function _swapTokens(address tokenIn, address tokenOut, uint256 amountIn) private returns (uint256) {
         uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
         if (amountOutMin == 0) revert InvalidSlippage();
-        IUniswapV3Router.ExactInputSingleParams memory params = IUniswapV3Router.ExactInputSingleParams({
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
-            fee: UNISWAP_POOL_FEE,
-            recipient: address(this),
-            deadline: block.timestamp + 5,
-            amountIn: amountIn,
-            amountOutMinimum: (amountOutMin * 9800) / 10000,
-            sqrtPriceLimitX96: 0
-        });
-        uint256 amountOut = uniswapRouter.exactInputSingle(params);
-        require(amountOut > 0, "Failed to swap!");
+        uint256 amountOut = uniswapRouter.exactInputSingle(
+            IUniswapV3Router.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: UNISWAP_POOL_FEE,
+                recipient: address(this),
+                deadline: block.timestamp + 5,
+                amountIn: amountIn,
+                amountOutMinimum: (amountOutMin * 9800) / 10000,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        if(amountOut != 0) SwapFailed();
         return amountOut;
-    }
-
-    // TODO : CHANGE TO NORMAL _getMinSwapAmount USING IUniswapV3Pool.slot0 AND sqrtPriceX96
-    function _getMinSwapAmount(address tokenIn, address tokenOut) private returns (uint256) {
-        uint256 minAmount = 2e8;
-        uint256 estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
-        while (estimatedOutput == 0) {
-            minAmount *= 2;
-            estimatedOutput = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, minAmount, 0);
-        }
-        return minAmount;
     }
 
     function getAccountData()
