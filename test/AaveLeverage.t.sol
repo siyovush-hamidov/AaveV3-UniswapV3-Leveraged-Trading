@@ -45,7 +45,7 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
         uint256 initialWethBalance = IERC20(WETH).balanceOf(WHALE);
         leverage.supplyCollateral(WETH, initialWethBalance);
-        leverage.openLeveragedPosition(true, 1.2e18);
+        leverage.openLeveragedPosition(true, 1e18);
 
         printStats();
         vm.stopPrank();

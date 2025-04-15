@@ -159,12 +159,12 @@ contract AaveLeverage is ReentrancyGuard {
 
         uint256 receivedAsset;
         uint256 availableBorrows = _getMaxBorrowAmount(borrowAsset);
-        uint256 minSwapAmountUSDC = 1e6;
-        uint256 minSwapAmountWETH = 1e15;
+        uint256 minBorrowUSDC = 1e6;
+        uint256 minBorrowWETH = 1e15;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
 
-        // do the loop until the desired healthFactor is maintained and the availableBorrows has an impact
-        while (healthFactor > minHealthFactor && availableBorrows > (isLong ? minSwapAmountUSDC : minSwapAmountWETH)) {
+        // Loop until health factor drops below min or borrow amount becomes too small to matter
+        while (healthFactor > minHealthFactor && availableBorrows > (isLong ? minBorrowUSDC : minBorrowWETH)) {
             aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
             receivedAsset = _swapTokens(borrowAsset, supplyAsset, availableBorrows);
             aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
@@ -235,7 +235,7 @@ contract AaveLeverage is ReentrancyGuard {
                 recipient: address(this),
                 deadline: block.timestamp + 5,
                 amountIn: amountIn,
-                amountOutMinimum: (amountOutMin * 9800) / 10000,
+                amountOutMinimum: (amountOutMin * 9900) / 10000,
                 sqrtPriceLimitX96: 0
             })
         );
