@@ -17,6 +17,7 @@ contract RunLeverageScript is Script {
     function run() public {
         vm.startBroadcast();
         uint24 UNISWAP_POOL_FEE = 3000;
+        uint24 AAVE_FLASH_LOAN_FEE = 500;
         AaveLeverage leverage = new AaveLeverage(
             AAVE_LENDING_POOL,
             AAVE_DATA_PROVIDER,
@@ -24,6 +25,7 @@ contract RunLeverageScript is Script {
             UNISWAP_ROUTER,
             UNISWAP_QUOTER,
             UNISWAP_POOL_FEE,
+            AAVE_FLASH_LOAN_FEE,
             WETH,
             USDC
         );
