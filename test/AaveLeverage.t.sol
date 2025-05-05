@@ -67,12 +67,12 @@ contract AaveLeverageTest is Test {
     function testFlashLoanLeverageLong() public {
         uint256 initialWethDeposit = 1 ether;
         uint24 slippageTolerance = 10000;
-        uint256 targetLeverage = 3.2e18;
+        uint256 targetLeverage = 4e18;
 
         vm.startPrank(WHALE);
         leverage.supplyCollateral(WETH, initialWethDeposit);
         leverage.openLeveragedPositionFlashLoan(initialWethDeposit, targetLeverage, slippageTolerance, true);
-
+        leverage.closePosition(true);
         printStats();
         vm.stopPrank();
     }
@@ -99,11 +99,18 @@ contract AaveLeverageTest is Test {
             uint256 ltv,
             uint256 healthFactor
         ) = leverage.getAccountData();
-        console.log("Total collateral (USD * 1e8):", totalCollateralBase);
-        console.log("Total debt:", totalDebtBase);
+        console.log("\n=== Position Snapshot ===");
+        console.log("Block timestamp:", block.timestamp);
+        console.log("Collateral: $", totalCollateralBase / 1e8);
+        console.log("Debt: $", totalDebtBase / 1e8);
+        console.log("Health factor:", healthFactor / 1e18);
+        console.log("----------------------------\n");
         console.log("Available to borrow:", availableBorrowsBase);
         console.log("LTV ratio (%):", ltv);
-        console.log("Health factor:", healthFactor);
-        console.log("Leverage ratio: x", totalCollateralBase * 1e18 / (totalCollateralBase - totalDebtBase));
+        if (totalCollateralBase - totalDebtBase > 0) {
+            console.log("Leverage ratio: x", totalCollateralBase * 1e18 / (totalCollateralBase - totalDebtBase));
+        }
+        console.log("WETH Balance: ", IERC20(WETH).balanceOf(WHALE));
+        console.log("USDC Balance: ", IERC20(USDC).balanceOf(WHALE));
     }
 }
