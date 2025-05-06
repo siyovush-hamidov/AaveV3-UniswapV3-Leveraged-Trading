@@ -128,7 +128,7 @@ contract AaveLeverage is ReentrancyGuard {
     address private immutable usdcAddress;
     uint24 private immutable UNISWAP_POOL_FEE;
     uint24 private immutable AAVE_FLASH_LOAN_FEE;
-    uint24 private constant SWAP_DEADLINE_DELTA = 5 seconds;
+    uint24 private immutable SWAP_DEADLINE_DELTA = 5;
 
     event LeveragedPositionOpened(address indexed opener);
     event LeveragedPositionOpenedWithFlashLoan(address indexed opener);
@@ -137,7 +137,6 @@ contract AaveLeverage is ReentrancyGuard {
 
     error OnlyOwner();
     error InsufficientBalance();
-    error InvalidAmountOutMin();
     error InvalidFlashLoanCallback();
     error InvalidFlashLoanInitiator();
     error ZeroFlashLoanBorrowAmount();
@@ -148,6 +147,7 @@ contract AaveLeverage is ReentrancyGuard {
     error ApproveFailed();
     error NoDebtToRepay();
     error InsufficientCollateral();
+    error InvalidTargetLeverage();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert OnlyOwner();
@@ -181,29 +181,28 @@ contract AaveLeverage is ReentrancyGuard {
         if (amount == 0) revert ZeroAmountSupplyCollateral();
         if (asset != wethAddress && asset != usdcAddress) revert UnsupportedAssetSupplyCollateral();
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        _approveIfNeeded(asset, address(aaveLendingPool));
+        _approveIfNeeded(asset, address(aaveLendingPool), type(uint256).max);
         aaveLendingPool.supply(asset, amount, address(this), 0);
     }
 
-    function openLeveragedPosition(bool isLong, uint256 minHealthFactor) external onlyOwner {
-        address borrowAsset = isLong ? usdcAddress : wethAddress;
-        address supplyAsset = isLong ? wethAddress : usdcAddress;
+    function openLeveragedPosition(bool isLong, uint256 minHealthFactor, uint24 slippageTolerance) external onlyOwner {
+        address debtAsset = isLong ? usdcAddress : wethAddress;
+        address collateralAsset = isLong ? wethAddress : usdcAddress;
 
-        _approveIfNeeded(borrowAsset, address(uniswapRouter));
-        _approveIfNeeded(supplyAsset, address(aaveLendingPool));
-
-        uint256 receivedAsset;
-        uint256 availableBorrows = _getMaxBorrowAmount(borrowAsset);
+        uint256 swappedAmount;
+        uint256 availableBorrows = _getMaxBorrowAmount(debtAsset);
         uint256 minBorrowUSDC = 1e6;
         uint256 minBorrowWETH = 1e15;
+        uint256 minBorrowThreshold = isLong ? minBorrowUSDC : minBorrowWETH;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
+        _approveIfNeeded(debtAsset, address(uniswapRouter), availableBorrows);
 
         // Loop until health factor drops below min or borrow amount becomes too small to matter
-        while (healthFactor > minHealthFactor && availableBorrows > (isLong ? minBorrowUSDC : minBorrowWETH)) {
-            aaveLendingPool.borrow(borrowAsset, availableBorrows, 2, 0, address(this));
-            receivedAsset = _swapExactInputSingle(borrowAsset, supplyAsset, availableBorrows);
-            aaveLendingPool.supply(supplyAsset, receivedAsset, address(this), 0);
-            availableBorrows = _getMaxBorrowAmount(borrowAsset);
+        while (healthFactor > minHealthFactor && availableBorrows > minBorrowThreshold) {
+            aaveLendingPool.borrow(debtAsset, availableBorrows, 2, 0, address(this));
+            swappedAmount = _swapExactInputSingle(debtAsset, collateralAsset, availableBorrows, slippageTolerance);
+            aaveLendingPool.supply(collateralAsset, swappedAmount, address(this), 0);
+            availableBorrows = _getMaxBorrowAmount(debtAsset);
             (,,,,, healthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
         emit LeveragedPositionOpened(msg.sender);
@@ -221,12 +220,34 @@ contract AaveLeverage is ReentrancyGuard {
         uint256 flashLoanAmount =
             _calculateFlashLoanAmount(asset, supplyAsset, initialDeposit, targetLeverage, slippageTolerance);
 
-        aaveLendingPool.flashLoanSimple(address(this), asset, flashLoanAmount, abi.encode(isLong, false), 0);
+        aaveLendingPool.flashLoanSimple(
+            address(this), asset, flashLoanAmount, abi.encode(isLong, false, slippageTolerance), 0
+        );
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
+    function closePosition(uint24 slippageTolerance, bool isLong) external onlyOwner nonReentrant {
+        address debtAsset = isLong ? usdcAddress : wethAddress;
+        address collateralAsset = isLong ? wethAddress : usdcAddress;
+
+        (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
+        if (totalDebtBase == 0) revert NoDebtToRepay();
+        aaveLendingPool.flashLoanSimple(
+            address(this), debtAsset, totalDebtBase, abi.encode(isLong, true, slippageTolerance), 0
+        );
+
+        if (IERC20(debtAsset).balanceOf(address(this)) > 0) {
+            IERC20(debtAsset).safeTransfer(owner, IERC20(debtAsset).balanceOf(address(this)));
+        }
+        if (IERC20(collateralAsset).balanceOf(address(this)) > 0) {
+            IERC20(collateralAsset).safeTransfer(owner, IERC20(collateralAsset).balanceOf(address(this)));
+        }
+
+        emit PositionClosed(msg.sender, collateralAsset, IERC20(collateralAsset).balanceOf(address(this)));
+    }
+
     function executeOperation(
-        address asset,
+        address debtAsset,
         uint256 amount,
         uint256 premium,
         address initiator,
@@ -235,59 +256,27 @@ contract AaveLeverage is ReentrancyGuard {
         if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
         if (initiator != address(this)) revert InvalidFlashLoanInitiator();
         if (amount == 0) revert ZeroFlashLoanBorrowAmount();
-
-        (bool isLong, bool isClosing) = abi.decode(paramsData, (bool, bool));
+        (bool isLong, bool isClosing, uint24 slippageTolerance) = abi.decode(paramsData, (bool, bool, uint24));
         uint256 totalToRepay = amount + premium;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
-
-        _approveIfNeeded(asset, address(aaveLendingPool));
-        _approveIfNeeded(asset, address(uniswapRouter));
-        _approveIfNeeded(collateralAsset, address(uniswapRouter));
-
+        _approveIfNeeded(debtAsset, address(aaveLendingPool), type(uint256).max);
         if (isClosing) {
-            aaveLendingPool.repay(asset, amount, 2, address(this));
+            aaveLendingPool.repay(debtAsset, type(uint256).max, 2, address(this));
             aaveLendingPool.withdraw(collateralAsset, type(uint256).max, address(this));
-
-            uint256 assetBalance = IERC20(asset).balanceOf(address(this));
+            uint256 assetBalance = IERC20(debtAsset).balanceOf(address(this));
             if (assetBalance < totalToRepay) {
-                uint256 receivedAssetFromUniswap =
-                    _swapExactOutputSingle(collateralAsset, asset, totalToRepay - assetBalance);
-                if (receivedAssetFromUniswap == 0) revert SwapFailed();
+                _swapExactOutputSingle(collateralAsset, debtAsset, totalToRepay - assetBalance, slippageTolerance);
             }
         } else {
-            uint256 receivedAssetFromUniswap = _swapExactInputSingle(asset, isLong ? wethAddress : usdcAddress, amount);
-            if (receivedAssetFromUniswap == 0) revert SwapFailed();
-
+            uint256 receivedAssetFromUniswap =
+                _swapExactInputSingle(debtAsset, isLong ? wethAddress : usdcAddress, amount, slippageTolerance);
             aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, initiator, 0);
-            aaveLendingPool.borrow(asset, totalToRepay, 2, 0, initiator);
+            aaveLendingPool.borrow(debtAsset, totalToRepay, 2, 0, initiator);
         }
-
-        if (IERC20(asset).balanceOf(address(this)) < totalToRepay) {
+        if (IERC20(debtAsset).balanceOf(address(this)) < totalToRepay) {
             revert InsufficientBalance();
         }
-
         return true;
-    }
-
-    function closePosition(bool isLong) external onlyOwner nonReentrant {
-        address debtAsset = isLong ? usdcAddress : wethAddress;
-        address collateralAsset = isLong ? wethAddress : usdcAddress;
-
-        (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
-        if (totalDebtBase == 0) revert NoDebtToRepay();
-        aaveLendingPool.flashLoanSimple(address(this), debtAsset, totalDebtBase, abi.encode(isLong, true), 0);
-
-        uint256 finalDebtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
-        uint256 finalCollateralAssetBalance = IERC20(collateralAsset).balanceOf(address(this));
-
-        if (finalDebtAssetBalance > 0) {
-            IERC20(debtAsset).safeTransfer(owner, finalDebtAssetBalance);
-        }
-        if (finalCollateralAssetBalance > 0) {
-            IERC20(collateralAsset).safeTransfer(owner, finalCollateralAssetBalance);
-        }
-
-        emit PositionClosed(msg.sender, collateralAsset, finalCollateralAssetBalance);
     }
 
     function getAccountData()
@@ -314,18 +303,21 @@ contract AaveLeverage is ReentrancyGuard {
         return maxBorrow;
     }
 
-    function _approveIfNeeded(address token, address spender) private {
+    function _approveIfNeeded(address token, address spender, uint256 amount) private {
         uint256 allowance = IERC20(token).allowance(address(this), spender);
-        if (allowance == 0) {
-            bool success = IERC20(token).approve(spender, type(uint256).max);
-            if (!success) revert ApproveFailed();
-            emit Approval(token, spender, type(uint256).max);
+        if (allowance < amount) {
+            IERC20(token).approve(spender, 0); // Reset to 0 first to mitigate risks
+            IERC20(token).approve(spender, amount);
+            emit Approval(token, spender, amount);
         }
     }
 
-    function _swapExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn) private returns (uint256) {
+    function _swapExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint24 slippageTolerance)
+        private
+        returns (uint256)
+    {
         uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
-        if (amountOutMin == 0) revert InvalidAmountOutMin();
+        _approveIfNeeded(tokenIn, address(uniswapRouter), amountIn);
         uint256 amountOut = uniswapRouter.exactInputSingle(
             IUniswapV3Router.ExactInputSingleParams({
                 tokenIn: tokenIn,
@@ -334,7 +326,7 @@ contract AaveLeverage is ReentrancyGuard {
                 recipient: address(this),
                 deadline: block.timestamp + SWAP_DEADLINE_DELTA,
                 amountIn: amountIn,
-                amountOutMinimum: (amountOutMin * 9900) / 10000,
+                amountOutMinimum: amountOutMin * (1000000 - slippageTolerance) / 1000000,
                 sqrtPriceLimitX96: 0
             })
         );
@@ -342,12 +334,12 @@ contract AaveLeverage is ReentrancyGuard {
         return amountOut;
     }
 
-    function _swapExactOutputSingle(address tokenIn, address tokenOut, uint256 amountOut) private returns (uint256) {
-        uint256 amountInMaximum =
-            uniswapQuoter.quoteExactOutputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountOut, 0);
-        if (amountInMaximum == 0) revert("Zero input maximum"); // TODO Здесь тоже
-        if (amountOut == 0) revert("Zero output amount"); // TODO НУЖНО УБРАТЬ ТЕКСТ
-        _approveIfNeeded(tokenIn, address(uniswapRouter));
+    function _swapExactOutputSingle(address tokenIn, address tokenOut, uint256 amountOut, uint256 slippageTolerance)
+        private
+        returns (uint256)
+    {
+        uint256 amountInMax = uniswapQuoter.quoteExactOutputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountOut, 0);
+        _approveIfNeeded(tokenIn, address(uniswapRouter), amountInMax);
         uint256 amountIn = uniswapRouter.exactOutputSingle(
             IUniswapV3Router.ExactOutputSingleParams({
                 tokenIn: tokenIn,
@@ -356,7 +348,7 @@ contract AaveLeverage is ReentrancyGuard {
                 recipient: address(this),
                 deadline: block.timestamp + SWAP_DEADLINE_DELTA,
                 amountOut: amountOut,
-                amountInMaximum: amountInMaximum,
+                amountInMaximum: amountInMax * (1000000 + slippageTolerance) / 1000000,
                 sqrtPriceLimitX96: 0
             })
         );
@@ -372,7 +364,7 @@ contract AaveLeverage is ReentrancyGuard {
         uint256 slippageTolerance
     ) private view returns (uint256) {
         if (initialDeposit == 0) revert ZeroAmountSupplyCollateral();
-        if (targetLeverage <= 1e18) revert("Leverage must be greater than 1");
+        if (targetLeverage <= 1e18) revert InvalidTargetLeverage();
 
         (uint256 assetDecimals,,,,,,,,,) = aaveDataProvider.getReserveConfigurationData(asset);
         (uint256 supplyAssetDecimals,,,,,,,,,) = aaveDataProvider.getReserveConfigurationData(supplyAsset);
