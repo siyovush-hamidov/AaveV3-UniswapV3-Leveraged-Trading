@@ -144,7 +144,6 @@ contract AaveLeverage is ReentrancyGuard {
     error ZeroAmountSupplyCollateral();
     error UnsupportedAssetSupplyCollateral();
     error ZeroAssetPrice();
-    error ApproveFailed();
     error NoDebtToRepay();
     error InsufficientCollateral();
     error InvalidTargetLeverage();
@@ -181,7 +180,7 @@ contract AaveLeverage is ReentrancyGuard {
         if (amount == 0) revert ZeroAmountSupplyCollateral();
         if (asset != wethAddress && asset != usdcAddress) revert UnsupportedAssetSupplyCollateral();
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        _approveIfNeeded(asset, address(aaveLendingPool), type(uint256).max);
+        IERC20(asset).approve(address(aaveLendingPool), type(uint256).max);
         aaveLendingPool.supply(asset, amount, address(this), 0);
     }
 
@@ -195,7 +194,7 @@ contract AaveLeverage is ReentrancyGuard {
         uint256 minBorrowWETH = 1e15;
         uint256 minBorrowThreshold = isLong ? minBorrowUSDC : minBorrowWETH;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
-        _approveIfNeeded(debtAsset, address(uniswapRouter), availableBorrows);
+        IERC20(debtAsset).approve(address(uniswapRouter), availableBorrows);
 
         // Loop until health factor drops below min or borrow amount becomes too small to matter
         while (healthFactor > minHealthFactor && availableBorrows > minBorrowThreshold) {
@@ -226,7 +225,7 @@ contract AaveLeverage is ReentrancyGuard {
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
-    function closePosition(uint24 slippageTolerance, bool isLong) external onlyOwner nonReentrant {
+    function closePosition(uint24 slippageTolerance, bool isLong) external onlyOwner {
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
 
@@ -259,7 +258,8 @@ contract AaveLeverage is ReentrancyGuard {
         (bool isLong, bool isClosing, uint24 slippageTolerance) = abi.decode(paramsData, (bool, bool, uint24));
         uint256 totalToRepay = amount + premium;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
-        _approveIfNeeded(debtAsset, address(aaveLendingPool), type(uint256).max);
+        IERC20(debtAsset).approve(address(aaveLendingPool), type(uint256).max);
+
         if (isClosing) {
             aaveLendingPool.repay(debtAsset, type(uint256).max, 2, address(this));
             aaveLendingPool.withdraw(collateralAsset, type(uint256).max, address(this));
@@ -303,21 +303,12 @@ contract AaveLeverage is ReentrancyGuard {
         return maxBorrow;
     }
 
-    function _approveIfNeeded(address token, address spender, uint256 amount) private {
-        uint256 allowance = IERC20(token).allowance(address(this), spender);
-        if (allowance < amount) {
-            IERC20(token).approve(spender, 0); // Reset to 0 first to mitigate risks
-            IERC20(token).approve(spender, amount);
-            emit Approval(token, spender, amount);
-        }
-    }
-
     function _swapExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint24 slippageTolerance)
         private
         returns (uint256)
     {
         uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
-        _approveIfNeeded(tokenIn, address(uniswapRouter), amountIn);
+        IERC20(tokenIn).approve(address(uniswapRouter), amountIn);
         uint256 amountOut = uniswapRouter.exactInputSingle(
             IUniswapV3Router.ExactInputSingleParams({
                 tokenIn: tokenIn,
@@ -339,7 +330,7 @@ contract AaveLeverage is ReentrancyGuard {
         returns (uint256)
     {
         uint256 amountInMax = uniswapQuoter.quoteExactOutputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountOut, 0);
-        _approveIfNeeded(tokenIn, address(uniswapRouter), amountInMax);
+        IERC20(tokenIn).approve(address(uniswapRouter), amountInMax);
         uint256 amountIn = uniswapRouter.exactOutputSingle(
             IUniswapV3Router.ExactOutputSingleParams({
                 tokenIn: tokenIn,

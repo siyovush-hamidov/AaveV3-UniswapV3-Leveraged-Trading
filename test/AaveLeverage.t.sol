@@ -49,7 +49,7 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,, uint256 healthFactor) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
         assertGt(ltv, 0, "LTV should be non-zero");
@@ -63,7 +63,7 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPosition(false, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,, uint256 healthFactor) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
         assertGt(ltv, 0, "LTV should be non-zero");
@@ -77,7 +77,7 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,, uint256 healthFactor) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
         assertGt(ltv, 0, "LTV should be non-zero");
@@ -91,7 +91,7 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,, uint256 healthFactor) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
         assertGt(ltv, 0, "LTV should be non-zero");
@@ -142,13 +142,11 @@ contract AaveLeverageTest is Test {
         console.log("Block timestamp:", block.timestamp);
         console.log("Collateral: $", totalCollateralBase / 1e8);
         console.log("Debt: $", totalDebtBase / 1e8);
-        console.log("Health factor:", healthFactor / 1e18);
+        console.log("Health factor:", healthFactor);
         console.log("Available to borrow:", availableBorrowsBase);
         console.log("LTV ratio (%):", ltv);
         if (totalCollateralBase > totalDebtBase) {
             console.log("Leverage ratio: x", totalCollateralBase * 1e18 / (totalCollateralBase - totalDebtBase));
         }
-        console.log("WETH Balance: ", IERC20(WETH).balanceOf(WHALE));
-        console.log("USDC Balance: ", IERC20(USDC).balanceOf(WHALE));
     }
 }
