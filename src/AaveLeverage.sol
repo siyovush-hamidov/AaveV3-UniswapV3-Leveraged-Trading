@@ -3,119 +3,17 @@ pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IAavePool.sol";
+import "./interfaces/IAaveProtocolDataProvider.sol";
+import "./interfaces/IUniswapV3Oracle.sol";
+import "./interfaces/ILendingPoolAddressesProvider.sol";
+import "./interfaces/IFlashLoanReceiver.sol";
+import "./interfaces/IUniswapV3Router.sol";
+import "./interfaces/IUniswapV3Quoter.sol";
+
 import "forge-std/Test.sol";
 
-interface IAavePool {
-    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
-    function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)
-        external;
-    function repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf)
-        external
-        returns (uint256);
-    function withdraw(address asset, uint256 amount, address to) external returns (uint256);
-    function flashLoanSimple(
-        address receiverAddress,
-        address asset,
-        uint256 amount,
-        bytes calldata params,
-        uint16 referralCode
-    ) external;
-    function getUserAccountData(address user)
-        external
-        view
-        returns (
-            uint256 totalCollateralBase,
-            uint256 totalDebtBase,
-            uint256 availableBorrowsBase,
-            uint256 currentLiquidationThreshold,
-            uint256 ltv,
-            uint256 healthFactor
-        );
-}
-
-interface IAaveProtocolDataProvider {
-    function getReserveConfigurationData(address asset)
-        external
-        view
-        returns (
-            uint256 decimals,
-            uint256 ltv,
-            uint256 liquidationThreshold,
-            uint256 liquidationBonus,
-            uint256 reserveFactor,
-            bool usageAsCollateralEnabled,
-            bool borrowingEnabled,
-            bool stableBorrowRateEnabled,
-            bool isActive,
-            bool isFrozen
-        );
-}
-
-interface IUniswapV3Oracle {
-    function getAssetPrice(address asset) external view returns (uint256);
-}
-
-interface ILendingPoolAddressesProvider {
-    function getPriceOracle() external view returns (address);
-}
-
-interface IFlashLoanReceiver {
-    function executeOperation(
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata premiums,
-        address initiator,
-        bytes calldata params
-    ) external returns (bool);
-}
-
-interface IUniswapV3Router {
-    struct ExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint24 fee;
-        address recipient;
-        uint256 deadline;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-        uint160 sqrtPriceLimitX96;
-    }
-
-    struct ExactOutputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint24 fee;
-        address recipient;
-        uint256 deadline;
-        uint256 amountOut;
-        uint256 amountInMaximum;
-        uint160 sqrtPriceLimitX96;
-    }
-
-    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
-    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
-}
-
-interface IUniswapV3Quoter {
-    function quoteExactInputSingle(
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountIn,
-        uint160 sqrtPriceLimitX96
-    ) external returns (uint256 amountOut);
-
-    function quoteExactOutputSingle(
-        address tokenIn,
-        address tokenOut,
-        uint24 fee,
-        uint256 amountOut,
-        uint160 sqrtPriceLimitX96
-    ) external returns (uint256 amountIn);
-}
-
-contract AaveLeverage is ReentrancyGuard {
+contract AaveLeverage {
     using SafeERC20 for IERC20;
 
     address private immutable owner;
@@ -127,7 +25,7 @@ contract AaveLeverage is ReentrancyGuard {
     address private immutable wethAddress;
     address private immutable usdcAddress;
     uint24 private immutable UNISWAP_POOL_FEE;
-    uint24 private immutable AAVE_FLASH_LOAN_FEE;
+    uint128 private immutable AAVE_FLASH_LOAN_FEE;
     uint24 private immutable SWAP_DEADLINE_DELTA = 5;
 
     event LeveragedPositionOpened(address indexed opener);
@@ -147,6 +45,7 @@ contract AaveLeverage is ReentrancyGuard {
     error NoDebtToRepay();
     error InsufficientCollateral();
     error InvalidTargetLeverage();
+    error InvalidUniswapFee();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert OnlyOwner();
@@ -160,7 +59,7 @@ contract AaveLeverage is ReentrancyGuard {
         address _uniswapRouter,
         address _uniswapQuoter,
         uint24 _UNISWAP_POOL_FEE,
-        uint24 _AAVE_FLASH_LOAN_FEE,
+        uint128 _AAVE_FLASH_LOAN_FEE,
         address _weth,
         address _usdc
     ) {
@@ -172,8 +71,8 @@ contract AaveLeverage is ReentrancyGuard {
         uniswapOracle = IUniswapV3Oracle(ILendingPoolAddressesProvider(_addressProvider).getPriceOracle());
         wethAddress = _weth;
         usdcAddress = _usdc;
+        AAVE_FLASH_LOAN_FEE = aaveLendingPool.FLASHLOAN_PREMIUM_TOTAL();
         UNISWAP_POOL_FEE = _UNISWAP_POOL_FEE;
-        AAVE_FLASH_LOAN_FEE = _AAVE_FLASH_LOAN_FEE;
     }
 
     function supplyCollateral(address asset, uint256 amount) external onlyOwner {
@@ -194,7 +93,7 @@ contract AaveLeverage is ReentrancyGuard {
         uint256 minBorrowWETH = 1e15;
         uint256 minBorrowThreshold = isLong ? minBorrowUSDC : minBorrowWETH;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
-        IERC20(debtAsset).approve(address(uniswapRouter), availableBorrows);
+        IERC20(debtAsset).approve(address(uniswapRouter), type(uint256).max);
 
         // Loop until health factor drops below min or borrow amount becomes too small to matter
         while (healthFactor > minHealthFactor && availableBorrows > minBorrowThreshold) {
@@ -214,13 +113,13 @@ contract AaveLeverage is ReentrancyGuard {
         bool isLong
     ) external onlyOwner {
         if (initialDeposit == 0) revert ZeroAmountSupplyCollateral();
-        address asset = isLong ? usdcAddress : wethAddress;
-        address supplyAsset = isLong ? wethAddress : usdcAddress;
+        address debtAsset = isLong ? usdcAddress : wethAddress;
+        address collateralAsset = isLong ? wethAddress : usdcAddress;
         uint256 flashLoanAmount =
-            _calculateFlashLoanAmount(asset, supplyAsset, initialDeposit, targetLeverage, slippageTolerance);
+            _calculateFlashLoanAmount(debtAsset, collateralAsset, initialDeposit, targetLeverage, slippageTolerance);
 
         aaveLendingPool.flashLoanSimple(
-            address(this), asset, flashLoanAmount, abi.encode(isLong, false, slippageTolerance), 0
+            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, false, slippageTolerance), 0
         );
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
@@ -265,12 +164,14 @@ contract AaveLeverage is ReentrancyGuard {
             aaveLendingPool.withdraw(collateralAsset, type(uint256).max, address(this));
             uint256 assetBalance = IERC20(debtAsset).balanceOf(address(this));
             if (assetBalance < totalToRepay) {
+                IERC20(collateralAsset).approve(address(uniswapRouter), type(uint256).max);
                 _swapExactOutputSingle(collateralAsset, debtAsset, totalToRepay - assetBalance, slippageTolerance);
             }
         } else {
+            IERC20(debtAsset).approve(address(uniswapRouter), amount);
             uint256 receivedAssetFromUniswap =
-                _swapExactInputSingle(debtAsset, isLong ? wethAddress : usdcAddress, amount, slippageTolerance);
-            aaveLendingPool.supply(isLong ? wethAddress : usdcAddress, receivedAssetFromUniswap, initiator, 0);
+                _swapExactInputSingle(debtAsset, collateralAsset, amount, slippageTolerance);
+            aaveLendingPool.supply(collateralAsset, receivedAssetFromUniswap, initiator, 0);
             aaveLendingPool.borrow(debtAsset, totalToRepay, 2, 0, initiator);
         }
         if (IERC20(debtAsset).balanceOf(address(this)) < totalToRepay) {
@@ -308,7 +209,7 @@ contract AaveLeverage is ReentrancyGuard {
         returns (uint256)
     {
         uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
-        IERC20(tokenIn).approve(address(uniswapRouter), amountIn);
+        // IERC20(tokenIn).approve(address(uniswapRouter), amountIn);
         uint256 amountOut = uniswapRouter.exactInputSingle(
             IUniswapV3Router.ExactInputSingleParams({
                 tokenIn: tokenIn,
@@ -330,7 +231,6 @@ contract AaveLeverage is ReentrancyGuard {
         returns (uint256)
     {
         uint256 amountInMax = uniswapQuoter.quoteExactOutputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountOut, 0);
-        IERC20(tokenIn).approve(address(uniswapRouter), amountInMax);
         uint256 amountIn = uniswapRouter.exactOutputSingle(
             IUniswapV3Router.ExactOutputSingleParams({
                 tokenIn: tokenIn,
@@ -364,7 +264,7 @@ contract AaveLeverage is ReentrancyGuard {
         uint256 supplyAssetPrice = uniswapOracle.getAssetPrice(supplyAsset);
 
         uint256 U = (uint256(UNISWAP_POOL_FEE) + slippageTolerance) * 1e12;
-        uint256 A = uint256(AAVE_FLASH_LOAN_FEE) * 1e12;
+        uint256 A = uint256(AAVE_FLASH_LOAN_FEE * 100) * 1e12;
 
         uint256 initialDepositInUSD = (initialDeposit * supplyAssetPrice) / (10 ** supplyAssetDecimals);
         uint256 numerator = initialDepositInUSD * (targetLeverage - 1e18 + U) / 1e18;

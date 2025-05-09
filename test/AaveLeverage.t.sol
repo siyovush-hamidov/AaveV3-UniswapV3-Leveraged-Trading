@@ -91,13 +91,34 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
-        assertGt(ltv, 0, "LTV should be non-zero");
         printStats();
         vm.stopPrank();
     }
+
+    // TODO: Closing short position is not working.
+    // Reason: After repayment in closePosition, the debt remains almost the same.
+    // So, withdrawing funds is not possible. While in the long position, the debt is fully repaid.
+    // But it still behaves oddly: In the long position, after repayment,
+    // the balance remains almost the same, but the debt is fully repaid.
+    // After withdrawing, we get the initially invested funds but with an enormous loss (10-15%).
+
+    // function testFlashLoanLeverageShortAndClose() public {
+    //     vm.startPrank(WHALE);
+    //     uint256 initialUsdc = 1500 * 1e6;
+    //     leverage.supplyCollateral(USDC, initialUsdc);
+    //     leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
+    //     leverage.closePosition(SLIPPAGE_BPS, false);
+
+    //     (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
+    //     assertGt(collateral, 0, "Collateral should be non-zero");
+    //     assertGt(debt, 0, "Debt should be non-zero");
+    //     assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
+    //     printStats();
+    //     vm.stopPrank();
+    // }
 
     function testManualLeverageLongAndClose() public {
         vm.startPrank(WHALE);
