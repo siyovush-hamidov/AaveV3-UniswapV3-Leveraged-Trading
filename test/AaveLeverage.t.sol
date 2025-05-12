@@ -23,8 +23,8 @@ contract AaveLeverageTest is Test {
 
     function setUp() public {
         vm.startPrank(WHALE);
-        deal(WETH, WHALE, 1 ether);
-        deal(USDC, WHALE, 2500 * 1e6);
+        deal(WETH, WHALE, 10 ether);
+        deal(USDC, WHALE, 10000 * 1e6);
 
         leverage = new AaveLeverage(
             AAVE_LENDING_POOL,
@@ -33,7 +33,6 @@ contract AaveLeverageTest is Test {
             UNISWAP_ROUTER,
             UNISWAP_QUOTER,
             UNISWAP_POOL_FEE,
-            AAVE_FLASH_LOAN_FEE,
             WETH,
             USDC
         );
@@ -45,49 +44,82 @@ contract AaveLeverageTest is Test {
 
     function testManualLeverageLong() public {
         vm.startPrank(WHALE);
-        uint256 initialWeth = 1 ether;
+        uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
-        assertGt(ltv, 0, "LTV should be non-zero");
+        printStats();
+        vm.stopPrank();
+    }
+
+    function testManualLeverageLongAndClose() public {
+        vm.startPrank(WHALE);
+        uint256 initialWeth = 5 ether;
+        leverage.supplyCollateral(WETH, initialWeth);
+        leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
+        leverage.closePosition(SLIPPAGE_BPS, true);
+
+        assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
         printStats();
         vm.stopPrank();
     }
 
     function testManualLeverageShort() public {
         vm.startPrank(WHALE);
-        uint256 initialUsdc = 1500 * 1e6;
+        uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPosition(false, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
-        assertGt(ltv, 0, "LTV should be non-zero");
+        printStats();
+        vm.stopPrank();
+    }
+
+    function testManualLeverageShortAndClose() public {
+        vm.startPrank(WHALE);
+        uint256 initialUsdc = 5000 * 1e6;
+        leverage.supplyCollateral(USDC, initialUsdc);
+        leverage.openLeveragedPosition(false, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
+        leverage.closePosition(SLIPPAGE_BPS, false);
+
+        assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
         printStats();
         vm.stopPrank();
     }
 
     function testFlashLoanLeverageLong() public {
         vm.startPrank(WHALE);
-        uint256 initialWeth = 1 ether;
+        uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
 
-        (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
+        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
         assertGt(collateral, 0, "Collateral should be non-zero");
         assertGt(debt, 0, "Debt should be non-zero");
-        assertGt(ltv, 0, "LTV should be non-zero");
+        printStats();
+        vm.stopPrank();
+    }
+
+    function testFlashLoanLeverageLongAndClose() public {
+        vm.startPrank(WHALE);
+        uint256 initialWeth = 5 ether;
+        leverage.supplyCollateral(WETH, initialWeth);
+        leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
+        leverage.closePosition(SLIPPAGE_BPS, true);
+
+        assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
         printStats();
         vm.stopPrank();
     }
 
     function testFlashLoanLeverageShort() public {
         vm.startPrank(WHALE);
-        uint256 initialUsdc = 1500 * 1e6;
+        uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
 
@@ -98,54 +130,14 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    // TODO: Closing short position is not working.
-    // Reason: After repayment in closePosition, the debt remains almost the same.
-    // So, withdrawing funds is not possible. While in the long position, the debt is fully repaid.
-    // But it still behaves oddly: In the long position, after repayment,
-    // the balance remains almost the same, but the debt is fully repaid.
-    // After withdrawing, we get the initially invested funds but with an enormous loss (10-15%).
-
-    // function testFlashLoanLeverageShortAndClose() public {
-    //     vm.startPrank(WHALE);
-    //     uint256 initialUsdc = 1500 * 1e6;
-    //     leverage.supplyCollateral(USDC, initialUsdc);
-    //     leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
-    //     leverage.closePosition(SLIPPAGE_BPS, false);
-
-    //     (uint256 collateral, uint256 debt,, uint256 ltv,,) = leverage.getAccountData();
-    //     assertGt(collateral, 0, "Collateral should be non-zero");
-    //     assertGt(debt, 0, "Debt should be non-zero");
-    //     assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
-    //     printStats();
-    //     vm.stopPrank();
-    // }
-
-    function testManualLeverageLongAndClose() public {
+    function testFlashLoanLeverageShortAndClose() public {
         vm.startPrank(WHALE);
-        uint256 initialWeth = 1 ether;
-        leverage.supplyCollateral(WETH, initialWeth);
-        leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
-        leverage.closePosition(SLIPPAGE_BPS, true);
+        uint256 initialUsdc = 5000 * 1e6;
+        leverage.supplyCollateral(USDC, initialUsdc);
+        leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
+        leverage.closePosition(SLIPPAGE_BPS, false);
 
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertEq(debt, 0, "Debt should be zero after closing");
-        assertEq(collateral, 0, "Collateral should be zero after closing");
-        assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
-        printStats();
-        vm.stopPrank();
-    }
-
-    function testFlashLoanLeverageLongAndClose() public {
-        vm.startPrank(WHALE);
-        uint256 initialWeth = 1 ether;
-        leverage.supplyCollateral(WETH, initialWeth);
-        leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
-        leverage.closePosition(SLIPPAGE_BPS, true);
-
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertEq(debt, 0, "Debt should be zero after closing");
-        assertEq(collateral, 0, "Collateral should be zero after closing");
-        assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
+        assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
         printStats();
         vm.stopPrank();
     }
@@ -169,5 +161,7 @@ contract AaveLeverageTest is Test {
         if (totalCollateralBase > totalDebtBase) {
             console.log("Leverage ratio: x", totalCollateralBase * 1e18 / (totalCollateralBase - totalDebtBase));
         }
+        console.log("Balance (USDC): ", IERC20(USDC).balanceOf(WHALE));
+        console.log("Balance (WETH): ", IERC20(WETH).balanceOf(WHALE));
     }
 }

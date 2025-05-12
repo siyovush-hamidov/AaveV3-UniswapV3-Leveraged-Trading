@@ -25,7 +25,6 @@ contract RunLeverageScript is Script {
             UNISWAP_ROUTER,
             UNISWAP_QUOTER,
             UNISWAP_POOL_FEE,
-            AAVE_FLASH_LOAN_FEE,
             WETH,
             USDC
         );

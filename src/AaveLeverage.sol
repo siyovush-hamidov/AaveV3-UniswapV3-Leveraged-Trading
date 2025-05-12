@@ -59,7 +59,6 @@ contract AaveLeverage {
         address _uniswapRouter,
         address _uniswapQuoter,
         uint24 _UNISWAP_POOL_FEE,
-        uint128 _AAVE_FLASH_LOAN_FEE,
         address _weth,
         address _usdc
     ) {
@@ -127,13 +126,12 @@ contract AaveLeverage {
     function closePosition(uint24 slippageTolerance, bool isLong) external onlyOwner {
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
-
         (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
         if (totalDebtBase == 0) revert NoDebtToRepay();
+        uint256 flashLoanAmount = _convertBaseToAsset(debtAsset, totalDebtBase);
         aaveLendingPool.flashLoanSimple(
-            address(this), debtAsset, totalDebtBase, abi.encode(isLong, true, slippageTolerance), 0
+            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, true, slippageTolerance), 0
         );
-
         if (IERC20(debtAsset).balanceOf(address(this)) > 0) {
             IERC20(debtAsset).safeTransfer(owner, IERC20(debtAsset).balanceOf(address(this)));
         }
@@ -158,7 +156,6 @@ contract AaveLeverage {
         uint256 totalToRepay = amount + premium;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         IERC20(debtAsset).approve(address(aaveLendingPool), type(uint256).max);
-
         if (isClosing) {
             aaveLendingPool.repay(debtAsset, type(uint256).max, 2, address(this));
             aaveLendingPool.withdraw(collateralAsset, type(uint256).max, address(this));
@@ -209,7 +206,6 @@ contract AaveLeverage {
         returns (uint256)
     {
         uint256 amountOutMin = uniswapQuoter.quoteExactInputSingle(tokenIn, tokenOut, UNISWAP_POOL_FEE, amountIn, 0);
-        // IERC20(tokenIn).approve(address(uniswapRouter), amountIn);
         uint256 amountOut = uniswapRouter.exactInputSingle(
             IUniswapV3Router.ExactInputSingleParams({
                 tokenIn: tokenIn,
@@ -275,5 +271,14 @@ contract AaveLeverage {
 
         if (flashLoanAmount == 0) revert ZeroFlashLoanBorrowAmount();
         return flashLoanAmount;
+    }
+
+    function _convertBaseToAsset(address asset, uint256 amountBase) private view returns (uint256) {
+        (uint256 reserveDecimals,,,,,,,,,) = aaveDataProvider.getReserveConfigurationData(asset);
+        uint256 slippage = 1e9;
+        uint256 assetPrice = uniswapOracle.getAssetPrice(asset);
+        if (assetPrice == 0) revert ZeroAssetPrice();
+        uint256 flashLoanAmount = (amountBase * (10 ** reserveDecimals)) / assetPrice;
+        return flashLoanAmount + (flashLoanAmount / slippage);
     }
 }
