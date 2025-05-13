@@ -1,68 +1,48 @@
-# 💰 Leverage Trading on Aave V3 with Uniswap V3
+# 💰 Leverage Trading on Aave with Uniswap
+This project lets you open leveraged trading positions using Aave and Uniswap. Amplify your trades by borrowing assets and swapping them in one go.
+️
+## What Does It Do?
+The AaveLeverage contract allows you to:
 
-This project demonstrates how to use Aave V3 to open leveraged positions on Uniswap V3. Imagine being able to amplify your trading power by borrowing assets directly from Aave!
+Open Long/Short Positions: Go long (WETH collateral, borrow USDC) or short (USDC collateral, borrow WETH) to multiply your market exposure.
+Use Flash Loans: Open or close positions efficiently with Aave flash loans, handling fees dynamically.
+Close Positions: Repay debts and withdraw collateral seamlessly, using flash loans and Uniswap swaps.
 
-## ️ What Does It Do?
-
-The program allows you to:
-
-- **Open Long and Short Leveraged Positions:** Multiply your potential profits (or losses) in the market by borrowing assets on Aave and trading them on Uniswap.
-- **Utilize Flash Loans:** For those who love speed and efficiency, it's possible to open leveraged positions using flash loans.
+Perfect for exploring DeFi leverage and flash loans!
 
 ## How to Run?
 
-1.  **Install Foundry:**
+Install Foundry:
+```
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
 
-    ```bash
-    curl -L https://foundry.paradigm.xyz | bash
-    foundryup
-    ```
+Clone the Repository:
+```
+git clone https://github.com/siyovush-hamidov/AaveV3-UniswapV3-Leveraged-Trading
+cd AaveV3-UniswapV3-Leveraged-Trading
+```
 
-    This is your magic tool for working with Solidity! ✨
+Update Submodules:
+```
+git submodule update --init --recursive
+```
+Run Anvil:
+```
+anvil --fork-url https://eth.llamarpc.com
+```
+Run Tests:
+```
+forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 --via-ir -vv
+```
 
-2.  **Clone the Repository:**
+Run the deployment script:
+```
+forge script script/RunLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vvvv
+```
 
-    ```bash
-    git clone https://github.com/siyovush-hamidov/AaveV3-UniswapV3-Leveraged-Trading
-    cd AaveV3-UniswapV3-Leveraged-Trading
-    ```
-
-3.  **Update Submodules:**
-
-    ```bash
-    git submodule update --init --recursive
-    ```
-
-    It's like assembling a team of superheroes for your project!
-
-4.  **Run Anvil:**
-
-    ```bash
-    anvil --fork-url https://eth.llamarpc.com
-    ```
-
-    This creates a local copy of the Ethereum mainnet where you can test your contract.
-
-5.  **Run the Deployment Script:**
-
-    ```bash
-    forge script script/RunLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vvvv
-    ```
-
-    This deploys your contract to the local network.
-
-6.  **Run Tests:**
-
-    ```bash
-    forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 --via-ir -vv
-    ```
-
-    Make sure everything works as expected! ✅
-
-## ⚠️ Disclaimer
-
+⚠️ Disclaimer
 This project is created for educational purposes only. It is not financial advice or a trading recommendation. Use it at your own risk!
-
-## Contribution
-
+Contribution
 Any suggestions and improvements are welcome! Let's make this project even cooler!

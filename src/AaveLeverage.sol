@@ -104,12 +104,13 @@ contract AaveLeverage {
         if (initialDeposit == 0) revert ZeroAmountSupplyCollateral();
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
+        bool isOpening = true;
         
         uint256 flashLoanAmount =
             _calculateFlashLoanAmount(debtAsset, collateralAsset, initialDeposit, targetLeverage, slippageTolerance);
         
         aaveLendingPool.flashLoanSimple(
-            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, false, slippageTolerance), 0
+            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, isOpening, slippageTolerance), 0
         );
         
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
@@ -120,10 +121,11 @@ contract AaveLeverage {
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
         if (totalDebtBase == 0) revert NoDebtToRepay();
+        bool isOpening = false;
         
         uint256 flashLoanAmount = _convertBaseToAsset(debtAsset, totalDebtBase);
         aaveLendingPool.flashLoanSimple(
-            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, true, slippageTolerance), 0
+            address(this), debtAsset, flashLoanAmount, abi.encode(isLong, isOpening, slippageTolerance), 0
         );
         
         if (IERC20(debtAsset).balanceOf(address(this)) > 0) {
@@ -146,12 +148,12 @@ contract AaveLeverage {
         if (msg.sender != address(aaveLendingPool)) revert InvalidFlashLoanCallback();
         if (initiator != address(this)) revert InvalidFlashLoanInitiator();
         if (amount == 0) revert ZeroFlashLoanBorrowAmount();
-        (bool isLong, bool isClosing, uint24 slippageTolerance) = abi.decode(paramsData, (bool, bool, uint24));
+        (bool isLong, bool isOpening, uint24 slippageTolerance) = abi.decode(paramsData, (bool, bool, uint24));
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         IERC20(debtAsset).approve(address(aaveLendingPool), type(uint256).max);
         uint256 totalToRepay = amount + premium;
         
-        if (!isClosing) {
+        if (isOpening) {
             IERC20(debtAsset).approve(address(uniswapRouter), amount);
             uint256 receivedAssetFromUniswap =
                 _swapExactInputSingle(debtAsset, collateralAsset, amount, slippageTolerance);
