@@ -4,7 +4,7 @@ pragma solidity ^0.8.13;
 import "forge-std/Script.sol";
 import "../src/AaveLeverage.sol";
 
-contract RunLeverageScript is Script {
+contract AaveLeverageScript is Script {
     address constant AAVE_LENDING_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant AAVE_DATA_PROVIDER = 0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3;
     address constant AAVE_ADDRESS_PROVIDER = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
@@ -17,7 +17,6 @@ contract RunLeverageScript is Script {
     function run() public {
         vm.startBroadcast();
         uint24 UNISWAP_POOL_FEE = 3000;
-        uint24 AAVE_FLASH_LOAN_FEE = 500;
         AaveLeverage leverage = new AaveLeverage(
             AAVE_LENDING_POOL,
             AAVE_DATA_PROVIDER,
