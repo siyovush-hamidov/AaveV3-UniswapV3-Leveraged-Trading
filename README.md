@@ -12,12 +12,6 @@ Perfect for exploring DeFi leverage and flash loans!
 
 ## How to Run?
 
-Install Foundry:
-```
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-```
-
 Clone the Repository:
 ```
 git clone https://github.com/siyovush-hamidov/AaveV3-UniswapV3-Leveraged-Trading
