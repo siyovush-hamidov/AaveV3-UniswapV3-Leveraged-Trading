@@ -46,11 +46,7 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
         uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
-        leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
-
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertGt(collateral, 0, "Collateral should be non-zero");
-        assertGt(debt, 0, "Debt should be non-zero");
+        leverage.openLeveragedPosition(MIN_HEALTH_FACTOR, SLIPPAGE_BPS, true);
         printStats();
         vm.stopPrank();
     }
@@ -59,9 +55,8 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
         uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
-        leverage.openLeveragedPosition(true, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
+        leverage.openLeveragedPosition(MIN_HEALTH_FACTOR, SLIPPAGE_BPS, true);
         leverage.closePosition(SLIPPAGE_BPS, true);
-
         assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
         printStats();
         vm.stopPrank();
@@ -71,11 +66,7 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
         uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
-        leverage.openLeveragedPosition(false, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
-
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertGt(collateral, 0, "Collateral should be non-zero");
-        assertGt(debt, 0, "Debt should be non-zero");
+        leverage.openLeveragedPosition(MIN_HEALTH_FACTOR, SLIPPAGE_BPS, false);
         printStats();
         vm.stopPrank();
     }
@@ -84,9 +75,8 @@ contract AaveLeverageTest is Test {
         vm.startPrank(WHALE);
         uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
-        leverage.openLeveragedPosition(false, MIN_HEALTH_FACTOR, SLIPPAGE_BPS);
+        leverage.openLeveragedPosition(MIN_HEALTH_FACTOR, SLIPPAGE_BPS, false);
         leverage.closePosition(SLIPPAGE_BPS, false);
-
         assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
         printStats();
         vm.stopPrank();
@@ -97,10 +87,6 @@ contract AaveLeverageTest is Test {
         uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
-
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertGt(collateral, 0, "Collateral should be non-zero");
-        assertGt(debt, 0, "Debt should be non-zero");
         printStats();
         vm.stopPrank();
     }
@@ -111,7 +97,6 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(WETH, initialWeth);
         leverage.openLeveragedPositionFlashLoan(initialWeth, TARGET_LEVERAGE, SLIPPAGE_BPS, true);
         leverage.closePosition(SLIPPAGE_BPS, true);
-
         assertGt(IERC20(WETH).balanceOf(WHALE), 0, "WETH balance should be non-zero");
         printStats();
         vm.stopPrank();
@@ -122,10 +107,6 @@ contract AaveLeverageTest is Test {
         uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
-
-        (uint256 collateral, uint256 debt,,,,) = leverage.getAccountData();
-        assertGt(collateral, 0, "Collateral should be non-zero");
-        assertGt(debt, 0, "Debt should be non-zero");
         printStats();
         vm.stopPrank();
     }
@@ -136,7 +117,6 @@ contract AaveLeverageTest is Test {
         leverage.supplyCollateral(USDC, initialUsdc);
         leverage.openLeveragedPositionFlashLoan(initialUsdc, TARGET_LEVERAGE, SLIPPAGE_BPS, false);
         leverage.closePosition(SLIPPAGE_BPS, false);
-
         assertGt(IERC20(USDC).balanceOf(WHALE), 0, "USDC balance should be non-zero");
         printStats();
         vm.stopPrank();

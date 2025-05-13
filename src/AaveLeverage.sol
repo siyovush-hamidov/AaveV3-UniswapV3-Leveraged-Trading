@@ -11,8 +11,6 @@ import "./interfaces/IFlashLoanReceiver.sol";
 import "./interfaces/IUniswapV3Router.sol";
 import "./interfaces/IUniswapV3Quoter.sol";
 
-import "forge-std/Test.sol";
-
 contract AaveLeverage {
     using SafeERC20 for IERC20;
 
@@ -70,35 +68,27 @@ contract AaveLeverage {
         uniswapOracle = IUniswapV3Oracle(ILendingPoolAddressesProvider(_addressProvider).getPriceOracle());
         wethAddress = _weth;
         usdcAddress = _usdc;
-        AAVE_FLASH_LOAN_FEE = aaveLendingPool.FLASHLOAN_PREMIUM_TOTAL();
         UNISWAP_POOL_FEE = _UNISWAP_POOL_FEE;
+        AAVE_FLASH_LOAN_FEE = aaveLendingPool.FLASHLOAN_PREMIUM_TOTAL();
     }
 
-    function supplyCollateral(address asset, uint256 amount) external onlyOwner {
-        if (amount == 0) revert ZeroAmountSupplyCollateral();
-        if (asset != wethAddress && asset != usdcAddress) revert UnsupportedAssetSupplyCollateral();
-        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        IERC20(asset).approve(address(aaveLendingPool), type(uint256).max);
-        aaveLendingPool.supply(asset, amount, address(this), 0);
-    }
-
-    function openLeveragedPosition(bool isLong, uint256 minHealthFactor, uint24 slippageTolerance) external onlyOwner {
+    function openLeveragedPosition(uint256 minHealthFactor, uint24 slippageTolerance, bool isLong) external onlyOwner {
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
 
-        uint256 swappedAmount;
-        uint256 availableBorrows = _getMaxBorrowAmount(debtAsset);
         uint256 minBorrowUSDC = 1e6;
         uint256 minBorrowWETH = 1e15;
+        uint256 availableBorrows = _getMaxBorrowAmount(debtAsset);
         uint256 minBorrowThreshold = isLong ? minBorrowUSDC : minBorrowWETH;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
+        uint256 swappedAmount;
+        
         IERC20(debtAsset).approve(address(uniswapRouter), type(uint256).max);
-
-        // Loop until health factor drops below min or borrow amount becomes too small to matter
         while (healthFactor > minHealthFactor && availableBorrows > minBorrowThreshold) {
             aaveLendingPool.borrow(debtAsset, availableBorrows, 2, 0, address(this));
             swappedAmount = _swapExactInputSingle(debtAsset, collateralAsset, availableBorrows, slippageTolerance);
             aaveLendingPool.supply(collateralAsset, swappedAmount, address(this), 0);
+  
             availableBorrows = _getMaxBorrowAmount(debtAsset);
             (,,,,, healthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
@@ -114,12 +104,13 @@ contract AaveLeverage {
         if (initialDeposit == 0) revert ZeroAmountSupplyCollateral();
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
+        
         uint256 flashLoanAmount =
             _calculateFlashLoanAmount(debtAsset, collateralAsset, initialDeposit, targetLeverage, slippageTolerance);
-
         aaveLendingPool.flashLoanSimple(
             address(this), debtAsset, flashLoanAmount, abi.encode(isLong, false, slippageTolerance), 0
         );
+        
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
@@ -128,10 +119,12 @@ contract AaveLeverage {
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
         if (totalDebtBase == 0) revert NoDebtToRepay();
+        
         uint256 flashLoanAmount = _convertBaseToAsset(debtAsset, totalDebtBase);
         aaveLendingPool.flashLoanSimple(
             address(this), debtAsset, flashLoanAmount, abi.encode(isLong, true, slippageTolerance), 0
         );
+        
         if (IERC20(debtAsset).balanceOf(address(this)) > 0) {
             IERC20(debtAsset).safeTransfer(owner, IERC20(debtAsset).balanceOf(address(this)));
         }
@@ -156,7 +149,14 @@ contract AaveLeverage {
         uint256 totalToRepay = amount + premium;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         IERC20(debtAsset).approve(address(aaveLendingPool), type(uint256).max);
-        if (isClosing) {
+        
+        if (!isClosing) {
+            IERC20(debtAsset).approve(address(uniswapRouter), amount);
+            uint256 receivedAssetFromUniswap =
+                _swapExactInputSingle(debtAsset, collateralAsset, amount, slippageTolerance);
+            aaveLendingPool.supply(collateralAsset, receivedAssetFromUniswap, initiator, 0);
+            aaveLendingPool.borrow(debtAsset, totalToRepay, 2, 0, initiator);
+        } else {
             aaveLendingPool.repay(debtAsset, type(uint256).max, 2, address(this));
             aaveLendingPool.withdraw(collateralAsset, type(uint256).max, address(this));
             uint256 assetBalance = IERC20(debtAsset).balanceOf(address(this));
@@ -164,17 +164,19 @@ contract AaveLeverage {
                 IERC20(collateralAsset).approve(address(uniswapRouter), type(uint256).max);
                 _swapExactOutputSingle(collateralAsset, debtAsset, totalToRepay - assetBalance, slippageTolerance);
             }
-        } else {
-            IERC20(debtAsset).approve(address(uniswapRouter), amount);
-            uint256 receivedAssetFromUniswap =
-                _swapExactInputSingle(debtAsset, collateralAsset, amount, slippageTolerance);
-            aaveLendingPool.supply(collateralAsset, receivedAssetFromUniswap, initiator, 0);
-            aaveLendingPool.borrow(debtAsset, totalToRepay, 2, 0, initiator);
         }
         if (IERC20(debtAsset).balanceOf(address(this)) < totalToRepay) {
             revert InsufficientBalance();
         }
         return true;
+    }
+
+    function supplyCollateral(address asset, uint256 amount) external onlyOwner {
+        if (amount == 0) revert ZeroAmountSupplyCollateral();
+        if (asset != wethAddress && asset != usdcAddress) revert UnsupportedAssetSupplyCollateral();
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+        IERC20(asset).approve(address(aaveLendingPool), type(uint256).max);
+        aaveLendingPool.supply(asset, amount, address(this), 0);
     }
 
     function getAccountData()
