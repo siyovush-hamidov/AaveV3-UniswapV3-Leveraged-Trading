@@ -24,7 +24,8 @@ Run Anvil:
 ```
 anvil --fork-url https://eth.llamarpc.com
 ```
-Find available RPC endpoints at chainlist.org/chain/1; we’re using Llama as an example.
+**Important Note:** We’re using Llama RPC as an example. Find available RPC endpoints at [Chainlist](chainlist.org/chain/1) if Llama fails.
+
 Run Tests:
 ```
 forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 --via-ir -vv
