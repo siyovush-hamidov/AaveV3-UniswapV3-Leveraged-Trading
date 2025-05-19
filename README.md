@@ -3,8 +3,8 @@ This project lets you open leveraged trading positions using Aave and Uniswap.
 ️
 ## What Does It Do?
 The AaveLeverage contract allows you to:
- 
-- Go long (WETH collateral, borrow USDC) or short (USDC collateral, borrow WETH) to multiply your market exposure.
+
+- Open Long/Short Positions: Go long (WETH collateral, borrow USDC) or short (USDC collateral, borrow WETH) to multiply your market exposure.
 - Use Flash Loans: Open or close positions efficiently with Aave flash loans, handling fees dynamically.
 - Close Positions: Repay debts and withdraw collateral seamlessly, using flash loans and Uniswap swaps.
 
