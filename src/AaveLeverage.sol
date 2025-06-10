@@ -76,19 +76,19 @@ contract AaveLeverage {
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
 
-        uint256 minBorrowUSDC = 1e6;
-        uint256 minBorrowWETH = 1e15;
+        uint256 minBorrowUSDC = 1e6; // 1 USDC
+        uint256 minBorrowWETH = 1e15; // 0.001 WETH
         uint256 availableBorrows = _getMaxBorrowAmount(debtAsset);
         uint256 minBorrowThreshold = isLong ? minBorrowUSDC : minBorrowWETH;
         uint256 swappedAmount;
         (,,,,, uint256 healthFactor) = aaveLendingPool.getUserAccountData(address(this));
-        
+
         IERC20(debtAsset).approve(address(uniswapRouter), type(uint256).max);
         while (healthFactor > minHealthFactor && availableBorrows > minBorrowThreshold) {
             aaveLendingPool.borrow(debtAsset, availableBorrows, 2, 0, address(this));
             swappedAmount = _swapExactInputSingle(debtAsset, collateralAsset, availableBorrows, slippageTolerance);
             aaveLendingPool.supply(collateralAsset, swappedAmount, address(this), 0);
-  
+
             availableBorrows = _getMaxBorrowAmount(debtAsset);
             (,,,,, healthFactor) = aaveLendingPool.getUserAccountData(address(this));
         }
@@ -105,14 +105,14 @@ contract AaveLeverage {
         address debtAsset = isLong ? usdcAddress : wethAddress;
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         bool isOpening = true;
-        
+
         uint256 flashLoanAmount =
             _calculateFlashLoanAmount(debtAsset, collateralAsset, initialDeposit, targetLeverage, slippageTolerance);
-        
+
         aaveLendingPool.flashLoanSimple(
             address(this), debtAsset, flashLoanAmount, abi.encode(isLong, isOpening, slippageTolerance), 0
         );
-        
+
         emit LeveragedPositionOpenedWithFlashLoan(msg.sender);
     }
 
@@ -122,12 +122,12 @@ contract AaveLeverage {
         (, uint256 totalDebtBase,,,,) = aaveLendingPool.getUserAccountData(address(this));
         if (totalDebtBase == 0) revert NoDebtToRepay();
         bool isOpening = false;
-        
+
         uint256 flashLoanAmount = _convertBaseToAsset(debtAsset, totalDebtBase);
         aaveLendingPool.flashLoanSimple(
             address(this), debtAsset, flashLoanAmount, abi.encode(isLong, isOpening, slippageTolerance), 0
         );
-        
+
         if (IERC20(debtAsset).balanceOf(address(this)) > 0) {
             IERC20(debtAsset).safeTransfer(owner, IERC20(debtAsset).balanceOf(address(this)));
         }
@@ -152,7 +152,7 @@ contract AaveLeverage {
         address collateralAsset = isLong ? wethAddress : usdcAddress;
         IERC20(debtAsset).approve(address(aaveLendingPool), type(uint256).max);
         uint256 totalToRepay = amount + premium;
-        
+
         if (isOpening) {
             IERC20(debtAsset).approve(address(uniswapRouter), amount);
             uint256 receivedAssetFromUniswap =

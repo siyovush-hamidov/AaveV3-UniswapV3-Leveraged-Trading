@@ -42,7 +42,7 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    function testManualLeverageLong() public {
+    function testIterativeLeverageLong() public {
         vm.startPrank(WHALE);
         uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
@@ -51,7 +51,7 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    function testManualLeverageLongAndClose() public {
+    function testIterativeLeverageLongAndClose() public {
         vm.startPrank(WHALE);
         uint256 initialWeth = 5 ether;
         leverage.supplyCollateral(WETH, initialWeth);
@@ -62,7 +62,7 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    function testManualLeverageShort() public {
+    function testIterativeLeverageShort() public {
         vm.startPrank(WHALE);
         uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
@@ -71,7 +71,7 @@ contract AaveLeverageTest is Test {
         vm.stopPrank();
     }
 
-    function testManualLeverageShortAndClose() public {
+    function testIterativeLeverageShortAndClose() public {
         vm.startPrank(WHALE);
         uint256 initialUsdc = 5000 * 1e6;
         leverage.supplyCollateral(USDC, initialUsdc);
