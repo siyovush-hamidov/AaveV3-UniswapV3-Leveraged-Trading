@@ -16,7 +16,6 @@ contract AaveLeverageTest is Test {
     address constant UNISWAP_QUOTER = 0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6;
 
     uint24 constant UNISWAP_POOL_FEE = 3000;
-    uint24 constant AAVE_FLASH_LOAN_FEE = 500;
     uint24 constant SLIPPAGE_BPS = 10000;
     uint256 constant MIN_HEALTH_FACTOR = 1.2e18;
     uint256 constant TARGET_LEVERAGE = 3e18;
