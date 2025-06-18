@@ -37,7 +37,7 @@ Run the deployment script:
 ```
 forge script script/AaveLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vv --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ```
-**Important Note:** Private key presented here is from anvil. Your crypto thieving dreams stay dreams :)
+**Important Note:** Private key presented here is from anvil.
 
 ## ⚠️ Disclaimer
 This project is created for educational purposes only. It is not financial advice or a trading recommendation.
