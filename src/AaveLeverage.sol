@@ -265,11 +265,10 @@ contract AaveLeverage {
         uint256 supplyAssetPrice = uniswapOracle.getAssetPrice(supplyAsset);
 
         uint256 U = (uint256(UNISWAP_POOL_FEE) + slippageTolerance) * 1e12;
-        uint256 A = uint256(AAVE_FLASH_LOAN_FEE * 100) * 1e12;
-
         uint256 initialDepositInUSD = (initialDeposit * supplyAssetPrice) / (10 ** supplyAssetDecimals);
-        uint256 numerator = initialDepositInUSD * (targetLeverage - 1e18 + U) / 1e18;
-        uint256 denominator = 1e18 - U - A;
+
+        uint256 numerator = initialDepositInUSD * (targetLeverage - 1e18) / 1e18;
+        uint256 denominator = 1e18 - U;
 
         uint256 flashLoanAmountInUSD = (numerator * 1e18) / denominator;
         uint256 flashLoanAmount = (flashLoanAmountInUSD * (10 ** assetDecimals)) / assetPrice;
