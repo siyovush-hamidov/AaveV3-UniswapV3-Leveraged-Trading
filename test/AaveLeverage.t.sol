@@ -171,21 +171,25 @@ contract AaveLeverageTest is Test {
             uint256 ltv,
             uint256 healthFactor
         ) = leverage.getAccountData();
-        console.log("\n=== Position Snapshot ===");
-        console.log("Block timestamp:", block.timestamp);
-        console.log("Collateral: $", totalCollateralBase / 1e8);
-        console.log("Debt: $", totalDebtBase / 1e8);
-        console.log("Health factor:", healthFactor);
-        console.log("Available to borrow:", availableBorrowsBase);
-        console.log("LTV ratio (%):", ltv);
+        console.log("Total collateral value ($):", totalCollateralBase / 1e8);
+        console.log("Total debt amount ($):", totalDebtBase / 1e8);
+        console.log("Position health factor (1e18):", healthFactor);
         if (totalCollateralBase > totalDebtBase) {
             console.log(
-                "Leverage ratio: x",
+                "Current leverage ratio (1e18):",
                 (totalCollateralBase * 1e18) /
                     (totalCollateralBase - totalDebtBase)
             );
         }
-        console.log("Balance (USDC): ", IERC20(USDC).balanceOf(WHALE));
-        console.log("Balance (WETH): ", IERC20(WETH).balanceOf(WHALE));
+        console.log("Available borrow amount ($):", availableBorrowsBase / 1e8);
+        console.log("LTV (1e2):", ltv);
+        console.log(
+            "Final Wallet USDC balance ($):",
+            IERC20(USDC).balanceOf(WHALE) / 1e6
+        );
+        console.log(
+            "Final Wallet WETH balance (1e18):",
+            IERC20(WETH).balanceOf(WHALE)
+        );
     }
 }

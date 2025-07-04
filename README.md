@@ -33,6 +33,20 @@ forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 
 
 **Important Note:** If tests fail due to errors like block retrival right after starting Anvil, wait a few minutes before running them.
 
+There are 8 tests in `AaveLeverage.t.sol` to qualify the functionality of the AaveLeverage contract:
+- Opening Long/Short Positions: `testIterativeLeverageLong` and `testIterativeLeverageShort` open leveraged positions using the iterative approach. `testFlashLoanLeverageLong`and `testFlashLoanLeverageShort` use flash loans.
+- Closing Positions: Tests `testIterativeLeverageLongAndClose`, `testIterativeLeverageShortAndClose`, `testFlashLoanLeverageLongAndClose` and `testFlashLoanLeverageShortAndClose` verify that positions can be closed, repaying debt and withdrawing collateral, ensuring non-zero balances.
+
+Each test outputs logs describing the position's state. For example, logs for `testFlashLoanLeverageLong` with an initial supply of 5 ETH ($12,500 at $2,500 per ETH) and target leverage of 3x:
+- Total collateral value ($): 38512. Indicates $38,512 supplied as collateral in AAVE.
+- Total debt amount ($): 25855. Represents $25,855 in debt.
+- Position health factor (1e18): 1236280482153737519. Shows the health factor is approximately 1.24, indicating a safe position. It is maximum when the position is closed.
+- Current leverage ratio (1e18): 3042923636400425440. Reflects a leverage of approximately 3.05x.
+- Available borrow amount ($): 5146. Indicates $5,146 still available to borrow, as maximum leverage was not targeted.
+- LTV (1e2): 8050. Represents an LTV of 80.5% for the ETH/USDC trading pair.
+- Final Wallet USDC balance ($): 10000. If the position is closed, balances may differ from the initial amount due to profits, losses, or fees.
+- Final Wallet WETH balance (1e18): 5000000000000000000. Represents 5 ETH; similar to USDC, balances may change if the position is closed.
+
 Run the deployment script:
 ```
 forge script script/AaveLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vv --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
