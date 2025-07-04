@@ -10,23 +10,23 @@ The AaveLeverage contract allows you to:
 
 ## How to Run?
 
-Clone the Repository:
+### 1. Clone the Repository:
 ```
 git clone https://github.com/siyovush-hamidov/AaveV3-UniswapV3-Leveraged-Trading
 cd AaveV3-UniswapV3-Leveraged-Trading
 ```
 
-Update Submodules:
+### 2. Update Submodules:
 ```
 git submodule update --init --recursive --progress
 ```
-Run Anvil:
+### 3. Run Anvil:
 ```
 anvil --fork-url https://eth.llamarpc.com
 ```
 **Important Note:** We’re using Llama RPC as an example. Find available RPC endpoints at [Chainlist](chainlist.org/chain/1) if Llama fails.
 
-Run Tests:
+### 4. Run Tests:
 ```
 forge test --match-path test/AaveLeverage.t.sol --rpc-url http://127.0.0.1:8545 --via-ir -vv
 ```
@@ -47,7 +47,7 @@ Each test outputs logs describing the position's state. For example, logs for `t
 - Final Wallet USDC balance ($): 10000. If the position is closed, balances may differ from the initial amount due to profits, losses, or fees.
 - Final Wallet WETH balance (1e18): 5000000000000000000. Represents 5 ETH; similar to USDC, balances may change if the position is closed.
 
-Run the deployment script:
+### 5. Run the deployment script:
 ```
 forge script script/AaveLeverage.s.sol:AaveLeverageScript --rpc-url http://127.0.0.1:8545 --broadcast -vv --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 ```
