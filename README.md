@@ -71,7 +71,7 @@ You can create your own script to interact with the contract. Once the contract 
 **Important Note:** Private key presented here is from Anvil.
 
 ## Disclaimer
-This project is created for educational purposes only. It is not financial advice or a trading recommendation.
+This project is created for educational purposes only. It is not financial advice or a trading recommendation. Do not use the code in production or with real funds.
 
 ## Contribution
 Any suggestions and improvements are welcome!
